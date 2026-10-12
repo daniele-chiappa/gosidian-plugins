@@ -4,11 +4,22 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
-## [0.1.0] — unreleased
+## [0.1.1] — 2026-10-12
 
-The first release: a pi agent (pi.dev 1.0.4) as a node of gosidian's
-pipelines. Needs gosidian 2.81 or later, and 2.85 for a list of files and
-the run's token budget.
+The first public release: 0.1.0 with the MCP SDK's fix. Needs gosidian
+2.81 or later, and 2.85 for a list of files and the run's token budget.
+
+### Security
+- **@modelcontextprotocol/sdk** to 1.31.0
+  ([GHSA-6qxp-vccf-f47h](https://github.com/advisories/GHSA-6qxp-vccf-f47h):
+  the SDK's OAuth client could send credentials to an authorization server
+  an MCP server chose). The plugin uses the SDK as a server, without OAuth,
+  and runs pi without MCP; it should not ship it anyway.
+
+## [0.1.0] — 2026-10-12
+
+A pi agent (pi.dev 1.0.4) as a node of gosidian's pipelines; not
+published.
 
 ### Added
 - **The run node**: a prompt, a system prompt (added or in place of pi's),
