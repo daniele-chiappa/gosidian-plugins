@@ -1,0 +1,67 @@
+version: 2
+# Weekly, Mondays. cooldown: a version younger than two weeks is not
+# proposed (a package two days old broke docling once).
+updates:
+  # storage: Go modules
+  - package-ecosystem: "gomod"
+    directory: "/storage"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "storage"]
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # docling: Python packages (requirements.txt; torch is in the Dockerfile)
+  - package-ecosystem: "pip"
+    directory: "/docling"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docling"]
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # The base images of the two Dockerfiles
+  - package-ecosystem: "docker"
+    directories: ["/storage", "/docling"]
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docker"]
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+
+  # The GitHub Actions of the workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ci"]
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"

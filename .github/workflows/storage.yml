@@ -1,0 +1,134 @@
+name: storage
+# A PR, or a push that touches storage/, tests the plugin. A tag
+# storage/vX.Y.Z builds its image for amd64 and arm64, tries it, pushes it
+# to GHCR as :X.Y.Z and :latest, and makes the release with its section of
+# storage/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of both plugins, required by the protection of
+  # main: a check filtered by path would never report on a PR of the other.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["storage/**", ".github/workflows/storage.yml"]
+    tags: ["storage/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-storage
+
+jobs:
+  test:
+    name: Test the plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: storage
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: storage/go.mod
+          cache-dependency-path: storage/go.sum
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt-clean (run gofmt -w):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet .
+
+      - name: go test
+        run: go test -race -count=1 .
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/storage/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#storage/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            storage/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "storage/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and try the amd64 image
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" \
+            --build-arg REVISION="${GITHUB_SHA}" -t storage-smoke storage/
+          printf 'sources:\n  - {name: smoke, kind: local, path: /tmp}\n' > "$RUNNER_TEMP/storage-smoke.yaml"
+          docker run -d --name storage-smoke --read-only --tmpfs /tmp -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            -v "$RUNNER_TEMP/storage-smoke.yaml:/etc/gosidian-storage/storage.yaml:ro" storage-smoke
+          for _ in $(seq 1 30); do
+            if docker exec storage-smoke /usr/local/bin/gosidian-storage healthcheck 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec storage-smoke wget -qO- http://127.0.0.1:8000/health | tee "$RUNNER_TEMP/health.json"
+          grep -q "\"version\":\"${{ steps.meta.outputs.version }}\"" "$RUNNER_TEMP/health.json"
+          docker exec storage-smoke test -s /licenses/INDEX
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build for amd64 and arm64, and push
+        # The Dockerfile compiles on the build platform for the target one:
+        # no emulation.
+        run: |
+          set -eu
+          docker buildx create --use --name multi
+          docker buildx build --platform linux/amd64,linux/arm64 --provenance=false \
+            --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
+            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" \
+            -t "${{ steps.meta.outputs.base }}:latest" \
+            --push storage/
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "storage ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64, arm64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f storage-smoke || true

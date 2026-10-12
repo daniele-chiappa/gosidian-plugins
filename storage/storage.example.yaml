@@ -1,0 +1,36 @@
+# The sources of gosidian-storage. Each is offered to gosidian by its name;
+# the owner binds it to a project's IN folder:
+#   gosidian plugin bind storage <source> <project> [--as <folder>] [--write]
+sources:
+  # A Nextcloud folder, read in the LAN. The credentials file has two
+  # lines, the user and an app password (with 2FA, a login password fails).
+  - name: nextcloud
+    kind: webdav
+    description: Nextcloud, the folder Fatture
+    url: http://nextcloud.lan/remote.php/dav/files/gosidian-storage/Fatture/
+    vendor: nextcloud
+    credentials: /run/secrets/nextcloud
+    # gosidian may move the files it worked on inside the folder (done/).
+    move: true
+  # An S3 bucket (here Cloudflare R2): gosidian reads the files from S3
+  # itself, with presigned URLs; the credentials file has the access key
+  # and the secret on two lines.
+  - name: archive
+    kind: s3
+    provider: Cloudflare
+    endpoint: https://<account>.r2.cloudflarestorage.com
+    region: auto
+    bucket: archive
+    prefix: fatture
+    credentials: /run/secrets/r2
+  # A Google Drive folder shared with a service account, whose JSON key is
+  # the credentials file. Native Google documents come as PDF or XLSX.
+  - name: shared
+    kind: drive
+    credentials: /run/secrets/drive.json
+    root_folder_id: 1AbCdEfGhIjKlMnOpQrStUvWxYz
+  # A folder of the plugin's disk, a volume of the compose file.
+  - name: scans
+    kind: local
+    description: The scanner's folder
+    path: /data/scans
