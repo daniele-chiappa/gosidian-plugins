@@ -71,7 +71,7 @@ plugin, as for WebDAV. A file's etag is its MD5 as S3 keeps it, so a move
 
 ### Google Drive
 
-> **Not tried yet** (0.2.0): the Drive connector is written and its
+> **Not tried yet** (since 0.2.0): the Drive connector is written and its
 > configuration tested, but it has not run against a real Drive. Try it
 > on a test folder first.
 
@@ -113,7 +113,7 @@ for a Nextcloud folder or a Drive folder).
 ```yaml
 services:
   gosidian-storage:
-    image: ghcr.io/daniele-chiappa/gosidian-storage:0.2.0
+    image: ghcr.io/daniele-chiappa/gosidian-storage:0.2.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${STORAGE_TOKEN:?}
@@ -155,7 +155,7 @@ gosidian plugin bind storage nextcloud archive --as fatture --write --every 2m
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.0 -t gosidian-storage:0.2.0 storage/
+docker build --build-arg VERSION=0.2.1 -t gosidian-storage:0.2.1 storage/
 docker run --rm -v "$PWD/storage:/src" -w /src golang:1.27-alpine go test .   # WebDAV, S3 (gofakes3) and a local folder, in-process
 storage/scripts/nextcloud-test.sh                                            # against a disposable Nextcloud 34
 storage/scripts/s3-test.sh                                                   # against a disposable Garage 2.4 (S3)

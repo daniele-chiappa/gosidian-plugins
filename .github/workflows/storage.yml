@@ -96,11 +96,10 @@ jobs:
           docker exec storage-smoke test -s /licenses/INDEX
 
       - name: Login to GHCR
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.REGISTRY }}
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
 
       - name: Build for amd64 and arm64, and push
         # The Dockerfile compiles on the build platform for the target one:

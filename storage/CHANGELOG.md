@@ -4,11 +4,21 @@ The changes of the `storage` plugin, newest first. A tag
 `storage/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-storage:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.1] — 2026-10-12
+
+The first public release: 0.2.0 with gRPC's fix. Needs gosidian 2.82 or
+later (2.84 for the native Google documents).
+
+### Security
+- **google.golang.org/grpc** to `v1.84.0-dev.0.20260825144003-d5a41119e0e3`
+  ([GHSA-2v4p-qf9q-27wj](https://github.com/advisories/GHSA-2v4p-qf9q-27wj),
+  a crash of an xDS server on a request without `:authority` and `Host`).
+  The plugin runs no gRPC server: the module comes with the Google
+  clients.
+
 ## [0.2.0] — 2026-10-12
 
-The first public release: S3 and Google Drive besides WebDAV and local
-folders. Needs gosidian 2.82 or later (2.84 for the native Google
-documents).
+S3 and Google Drive besides WebDAV and local folders.
 
 ### Added
 - **S3** (`kind: s3`: AWS, Cloudflare R2, Backblaze B2, Wasabi, Garage…):
