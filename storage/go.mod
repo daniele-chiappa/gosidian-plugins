@@ -4,7 +4,7 @@ go 1.27.0
 
 require (
 	github.com/mark3labs/mcp-go v1.1.1
-	github.com/rclone/gofakes3 v0.0.9
+	github.com/rclone/gofakes3 v0.0.10
 	github.com/rclone/rclone v1.75.1
 	go.yaml.in/yaml/v3 v3.0.5
 	golang.org/x/net v0.57.0
