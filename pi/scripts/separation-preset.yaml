@@ -1,0 +1,8 @@
+name: pi-sep
+endpoint:
+  base_url: http://pi-harness:9000/v1
+  api_key_env: PI_TEST_KEY
+models:
+  - id: m
+tools:
+  allowed: [read, ls, bash, write]

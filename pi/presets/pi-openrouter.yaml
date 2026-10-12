@@ -1,0 +1,90 @@
+# An agent on OpenRouter, with a choice of models. The routing is the one
+# of whoever runs the plugin: these are examples. OpenRouter serves an
+# open-weight model from many providers, at different quantizations; an
+# agent calls tools reliably on fp8 or better, and data_collection: deny
+# keeps the requests out of a provider's training. A closed model's
+# endpoints report no quantization, so a model sets its own provider block
+# (it replaces the endpoint's).
+# The costs are dollars per million tokens, as OpenRouter listed them on
+# 2026-10-12 (a model's price varies by provider): pi adds them up for
+# max_cost (with them, a bench run cost 1.7 times what OpenRouter billed:
+# max_cost errs on the safe side).
+# On a bench of six tasks over converted procedures (2026-10-12) every
+# model made 60 of 60, or one or two points less: the tasks are easy for
+# them, and cost and speed decide. Six tasks cost from $0.003 (gpt-6-luna)
+# to $0.22 (sonnet-5.5), in 49 s (sonnet-5.5) to 6 min (glm-5.3).
+name: pi-openrouter
+description: A pi agent on OpenRouter
+endpoint:
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  body:
+    provider:
+      quantizations: [fp8, bf16]
+      data_collection: deny
+      require_parameters: true
+models:
+  # strong
+  - id: anthropic/claude-sonnet-5.5
+    name: sonnet-5.5
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    images: true
+    cost: {input: 2, output: 10}
+    body: {provider: {data_collection: deny, require_parameters: true}}
+  - id: xiaomi/mimo-v2.6-pro
+    name: mimo-v2.6-pro
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 0.435, output: 0.87}
+  - id: z-ai/glm-5.3
+    name: glm-5.3
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 1.4, output: 4.4}
+  - id: qwen/qwen3.8-max-0902
+    name: qwen3.8-max
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 2, output: 6}
+    body: {provider: {data_collection: deny, require_parameters: true}}
+  # cheap
+  - id: z-ai/glm-5.3-flash
+    name: glm-5.3-flash
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 0.15, output: 0.5}
+  - id: deepseek/deepseek-v4.1-flash
+    name: deepseek-v4.1-flash
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 0.3, output: 1.2}
+  - id: openai/gpt-6-luna
+    name: gpt-6-luna
+    context: 1000000
+    max_output: 32000
+    reasoning: true
+    cost: {input: 0.1, output: 0.5}
+    body: {provider: {data_collection: deny, require_parameters: true}}
+  # the full-precision reference of the local model, for a bench
+  - id: qwen/qwen3.8-27b
+    name: qwen3.8-27b-ref
+    context: 262144
+    max_output: 16000
+    cost: {input: 0.04, output: 2.3}
+default_model: mimo-v2.6-pro
+thinking: "off"
+tools:
+  allowed: [read, grep, find, ls]
+limits:
+  default: {max_turns: 30, max_seconds: 10m, max_tokens: 500000, max_cost: 0.5}
+  max: {max_turns: 80, max_seconds: 14m, max_tokens: 3000000, max_cost: 5}
+system: |
+  You read the documents of the task with your tools before answering, and
+  answer in the language of the task. Quote the document a fact comes from.

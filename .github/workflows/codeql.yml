@@ -1,5 +1,6 @@
 name: CodeQL
-# Static analysis of storage (Go), docling (Python) and the workflows.
+# Static analysis of storage (Go), docling (Python), pi (TypeScript) and the
+# workflows.
 # Weekly, and on every push and PR to main. Results under Security → Code
 # scanning alerts.
 
@@ -30,6 +31,8 @@ jobs:
           - language: go
             build-mode: manual
           - language: python
+            build-mode: none
+          - language: javascript-typescript
             build-mode: none
           - language: actions
             build-mode: none

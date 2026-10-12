@@ -15,7 +15,7 @@ updates:
     open-pull-requests-limit: 5
     labels: ["dependencies", "storage"]
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
 
   # docling: Python packages (requirements.txt; torch is in the Dockerfile)
@@ -31,12 +31,28 @@ updates:
     open-pull-requests-limit: 3
     labels: ["dependencies", "docling"]
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
 
-  # The base images of the two Dockerfiles
+  # pi: npm packages (pi itself among them)
+  - package-ecosystem: "npm"
+    directory: "/pi"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "pi"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
+  # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling"]
+    directories: ["/storage", "/docling", "/pi"]
     schedule:
       interval: "weekly"
       day: "monday"
@@ -47,7 +63,7 @@ updates:
     open-pull-requests-limit: 3
     labels: ["dependencies", "docker"]
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"
 
   # The GitHub Actions of the workflows
@@ -63,5 +79,5 @@ updates:
     open-pull-requests-limit: 3
     labels: ["dependencies", "ci"]
     commit-message:
-      prefix: "chore(deps)"
+      prefix: "chore"
       include: "scope"

@@ -1,0 +1,37 @@
+# An agent on a local GPU: llama.cpp's llama-server (OpenAI-compatible, with
+# its tool-call parser) serving Qwen3.8-27B at 3 bits (Unsloth's
+# UD-Q3_K_XL GGUF, about 13 GB) in 16 GB of VRAM, 64K of context, thinking
+# off. A sketch of the server's flags:
+#   llama-server -m Qwen3.8-27B-UD-Q3_K_XL.gguf --alias qwen3.8-27b -ngl 99 \
+#     -c 65536 -fa on -ctk q8_0 -ctv q8_0 --reasoning off -np 1 --api-key-file …
+# The second model is faster and weaker: Qwen3.6-35B-A3B UD-IQ3_S.
+# On a bench of six tasks over converted procedures (an RTX 4060 Ti 16 GB,
+# 2026-10-12) Qwen3.8-27B made 60 of 60, at about 19 tokens a second; the
+# 35B-A3B was several times faster but once answered without reading the
+# files, and once looped until max_tokens stopped it.
+name: pi-locale
+description: A pi agent on the local GPU (llama.cpp), Qwen3.8-27B at 3 bits
+endpoint:
+  base_url: http://gpu.lan:8080/v1
+  api_key_env: LLAMA_API_KEY
+models:
+  - id: qwen3.8-27b
+    context: 65536
+    max_output: 8192
+    # Qwen's settings without thinking
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, presence_penalty: 1.5}
+  - id: qwen3.6-35b-a3b
+    context: 65536
+    max_output: 8192
+    sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, presence_penalty: 1.5}
+default_model: qwen3.8-27b
+thinking: "off"
+tools:
+  allowed: [read, grep, find, ls]
+limits:
+  # A local model is slow (about 15 tokens a second) and costs nothing.
+  default: {max_turns: 30, max_seconds: 12m, max_tokens: 400000, max_cost: 0}
+  max: {max_turns: 60, max_seconds: 14m, max_tokens: 1000000, max_cost: 0}
+system: |
+  You read the documents of the task with your tools before answering, and
+  answer in the language of the task. Quote the document a fact comes from.

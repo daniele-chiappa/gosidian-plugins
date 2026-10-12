@@ -1,0 +1,27 @@
+{
+  "name": "gosidian-pi",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A gosidian plugin whose node runs a pi agent (pi.dev) on the files a pipeline hands it",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test --test-concurrency=1 \"test/*.test.ts\"",
+    "check": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@modelcontextprotocol/sdk": "1.30.1",
+    "ajv": "8.20.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2"
+  }
+}

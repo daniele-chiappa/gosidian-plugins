@@ -10,6 +10,7 @@ is called, the files it gives back) is gosidian's
 | Plugin | What it does | Image |
 |---|---|---|
 | [docling](docling/) | `docling.convert`: PDF, DOCX, XLSX, PPTX, HTML, images and the older office formats to markdown, the pictures as files | `ghcr.io/daniele-chiappa/gosidian-docling` (amd64) |
+| [pi](pi/) | `<agent>.run`: a pi agent (pi.dev) on a task and its files, in several turns with tools, answering with text or JSON; one container per agent and preset (a local GPU, OpenRouter…) | `ghcr.io/daniele-chiappa/gosidian-pi` (amd64) |
 | [storage](storage/) | no nodes: sources for the IN folders (gosidian 2.82), a WebDAV folder (Nextcloud), an S3 bucket, a Google Drive folder or a local one, read with rclone | `ghcr.io/daniele-chiappa/gosidian-storage` (amd64, arm64) |
 
 ## Using a plugin
