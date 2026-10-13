@@ -1,0 +1,48 @@
+# An archive on PostgreSQL with pgvector, its embeddings from Ollama.
+# The models and their prefixes are those of a bench on Italian documents
+# (procedures of a factory and Belebele, 2026-10-12, an RTX 4060 Ti):
+# Qwen3-Embedding-8B found best (MRR 0.90 and 0.98), EmbeddingGemma close
+# (0.86 and 0.94) and eight times faster. A model's prefixes matter: without
+# its own, EmbeddingGemma lost 5 points, and Qwen3 with another instruction
+# 8. Which model is the default is the choice of whoever runs the plugin.
+description: Chunks in PostgreSQL, embeddings from Ollama
+endpoint:
+  base_url: http://ollama:11434/v1
+models:
+  - id: embeddinggemma:300m
+    name: embeddinggemma
+    dims: 768
+    query_prefix: "task: search result | query: "
+    document_template: "title: {title} | text: {text}"
+  - id: qwen3-embedding:8b
+    name: qwen3-embedding-8b
+    dims: 4096
+    # Cut to 1024 (Matryoshka): the bench lost 0.01 of MRR, and pgvector
+    # indexes up to 2000 numbers as vector.
+    dimensions: 1024
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+  - id: qwen3-embedding:4b
+    name: qwen3-embedding-4b
+    dims: 2560
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+  - id: qwen3-embedding:0.6b
+    name: qwen3-embedding-0.6b
+    dims: 1024
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+  - id: bge-m3:567m
+    name: bge-m3
+    dims: 1024
+  - id: snowflake-arctic-embed2:568m
+    name: arctic-embed2
+    dims: 1024
+    query_prefix: "query: "
+default_model: embeddinggemma
+store:
+  kind: postgres
+  # The password is DB_PASSWORD. The role owns the plugin's schemas and
+  # creates the extension vector (or finds it made).
+  url: postgres://gosidian@postgres:5432/vectors
+  # kind: qdrant
+  # url: http://qdrant:6333          # the key, if any, is DB_PASSWORD
+  # kind: sqlite
+  # path: /data                       # a file per project

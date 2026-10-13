@@ -50,9 +50,25 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # database: Go modules
+  - package-ecosystem: "gomod"
+    directory: "/database"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "database"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi"]
+    directories: ["/storage", "/docling", "/pi", "/database"]
     schedule:
       interval: "weekly"
       day: "monday"

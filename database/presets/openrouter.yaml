@@ -1,0 +1,49 @@
+# An archive on Qdrant, its embeddings from OpenRouter. data_collection:
+# deny keeps the texts out of a provider's training. The prices are
+# dollars per million tokens as OpenRouter listed them on 2026-10-12. On
+# the bench of that day (Italian procedures, Belebele) gemini-embedding-2
+# and qwen3-embedding-8b led (MRR 0.91 and 0.96, 0.89 and 0.99), then
+# voyage-4-large (0.89, 0.97) and text-embedding-3-large (0.87, 0.93); the
+# choice is whoever runs the plugin's.
+description: Chunks in Qdrant, embeddings from OpenRouter
+endpoint:
+  base_url: https://openrouter.ai/api/v1
+  api_key_env: OPENROUTER_API_KEY
+  body:
+    provider:
+      data_collection: deny
+models:
+  - id: google/gemini-embedding-2
+    name: gemini-embedding-2
+    dims: 3072
+    dimensions: 1536
+    query_prefix: "task: search result | query: "
+    document_template: "title: {title} | text: {text}"
+    cost: {input: 0.20}
+  - id: qwen/qwen3-embedding-8b
+    name: qwen3-embedding-8b
+    dims: 4096
+    dimensions: 1024
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    cost: {input: 0.01}
+  - id: voyageai/voyage-4-large
+    name: voyage-4-large
+    dims: 1024
+    cost: {input: 0.12}
+  - id: openai/text-embedding-3-large
+    name: text-embedding-3-large
+    dims: 3072
+    dimensions: 1024
+    cost: {input: 0.13}
+  - id: openai/text-embedding-3-small
+    name: text-embedding-3-small
+    dims: 1536
+    cost: {input: 0.02}
+  - id: mistralai/mistral-embed-2312
+    name: mistral-embed
+    dims: 1024
+    cost: {input: 0.10}
+default_model: qwen3-embedding-8b
+store:
+  kind: qdrant
+  url: http://qdrant:6333

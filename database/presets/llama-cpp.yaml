@@ -1,0 +1,28 @@
+# An archive in SQLite, its embeddings from a llama-server started with
+# --embedding (one model per server; with the router mode, several). GGUF
+# models the bench of 2026-10-12 found good: Nemotron-3-Embed-1B (MRR 0.87
+# and 0.97 at 2048 numbers), Harrier-OSS-v1 0.6B (0.87 and 0.93),
+# EmbeddingGemma 2 (0.86 and 0.93), Granite Embedding R2 311m (0.82 and
+# 0.91, the fastest).
+description: Chunks in SQLite, embeddings from llama.cpp
+endpoint:
+  base_url: http://gpu.lan:8080/v1
+  api_key_env: LLAMA_API_KEY
+models:
+  - id: nemotron-3-embed-1b
+    dims: 2048
+    query_prefix: "query: "
+    document_template: "passage: {text}"
+  - id: harrier-oss-v1-0.6b
+    dims: 1024
+    query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+  - id: embeddinggemma-2
+    dims: 768
+    query_prefix: "task: search result | query: "
+    document_template: "title: {title} | text: {text}"
+  - id: granite-embedding-r2
+    dims: 768
+default_model: nemotron-3-embed-1b
+store:
+  kind: sqlite
+  path: /data

@@ -1,0 +1,117 @@
+name: database
+# A PR, or a push that touches database/, tests the plugin against
+# PostgreSQL with pgvector, Qdrant and SQLite with sqlite-vec. A tag
+# database/vX.Y.Z builds its image (amd64: cgo for SQLite), tries it,
+# pushes it to GHCR as :X.Y.Z and :latest, and makes the release with its
+# section of database/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["database/**", ".github/workflows/database.yml"]
+    tags: ["database/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-database
+
+jobs:
+  test:
+    name: Test the database
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: gofmt and go vet
+        run: |
+          docker run --rm -v "$PWD/database:/src" -w /src golang:1.27-alpine sh -c '
+            apk add -q gcc musl-dev
+            out=$(gofmt -l .)
+            if [ -n "$out" ]; then echo "Not gofmt-clean (run gofmt -w):"; echo "$out"; exit 1; fi
+            CGO_ENABLED=1 go vet .'
+
+      - name: go test on the three stores
+        run: sh database/scripts/test.sh
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/database/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#database/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            database/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "database/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and try the image
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" \
+            --build-arg REVISION="${GITHUB_SHA}" -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" database/
+          printf 'endpoint: {base_url: "http://127.0.0.1:9/v1"}\nmodels: [{id: m, dims: 8}]\nstore: {kind: sqlite, path: /data}\n' > "$RUNNER_TEMP/preset.yaml"
+          docker run -d --name database-smoke --read-only --tmpfs /data:uid=65532 -e DB_NAME=smoke -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            -v "$RUNNER_TEMP/preset.yaml:/etc/gosidian-database/preset.yaml:ro" "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          for _ in $(seq 1 30); do
+            if docker exec database-smoke /usr/local/bin/gosidian-database healthcheck 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec database-smoke wget -qO- http://127.0.0.1:8000/health | tee "$RUNNER_TEMP/health.json"
+          grep -q "\"version\":\"${{ steps.meta.outputs.version }}\"" "$RUNNER_TEMP/health.json"
+          docker exec database-smoke test -s /licenses/INDEX
+          docker exec database-smoke test -s /licenses/sqlite-vec/LICENSE-MIT
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        run: |
+          set -eu
+          docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
+          docker push "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "database ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f database-smoke || true
