@@ -7,13 +7,16 @@ set -eu
 cd "$(dirname "$0")/.."
 NET=gosidian-db-test-$$
 docker network create "$NET" >/dev/null
-docker run -d --rm --name "$NET-pg" --network "$NET" --cpus=2 -e POSTGRES_PASSWORD=test pgvector/pgvector:0.8.6-pg18-trixie >/dev/null
-docker run -d --rm --name "$NET-qdrant" --network "$NET" --cpus=2 qdrant/qdrant:v1.19.1-unprivileged >/dev/null
+docker run -d --rm --name "$NET-pg" --network "$NET" --cpus=1 -e POSTGRES_PASSWORD=test pgvector/pgvector:0.8.6-pg18-trixie >/dev/null
+docker run -d --rm --name "$NET-qdrant" --network "$NET" --cpus=1 qdrant/qdrant:v1.19.1-unprivileged >/dev/null
 trap 'docker stop "$NET-pg" "$NET-qdrant" >/dev/null 2>&1; docker network rm "$NET" >/dev/null 2>&1' EXIT
 timeout 60 sh -c "until docker exec $NET-pg pg_isready -q -U postgres; do sleep 1; done"
+# The CPUs of the tests: the host's, at most 8 (a runner of GitHub has 4).
+CPUS=$(nproc)
+[ "$CPUS" -gt 8 ] && CPUS=8
 CACHE=${GOCACHE_DIR:-}
 GPATH=${GOPATH_DIR:-}
-docker run --rm --network "$NET" --cpus=8 -v "$PWD:/src" -w /src \
+docker run --rm --network "$NET" --cpus="$CPUS" -v "$PWD:/src" -w /src \
   ${CACHE:+-v "$CACHE:/cache" -e GOCACHE=/cache} ${GPATH:+-v "$GPATH:/gopath" -e GOPATH=/gopath} \
   -e PG_URL="postgres://postgres:test@$NET-pg:5432/postgres" -e QDRANT_URL="http://$NET-qdrant:6333" \
   -e SQLITE_VEC=/tmp/vec/vec0 -e CGO_ENABLED=1 -e OWNER="$(id -u):$(id -g)" \

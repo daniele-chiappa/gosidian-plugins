@@ -4,11 +4,22 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.1.1] — 2026-10-13
+
+The first public release: 0.1.0, with the tests' script fit for a runner
+of 4 CPUs. An archive of vectors on PostgreSQL with pgvector, Qdrant or
+SQLite with sqlite-vec, with the embeddings from a preset, for the
+pipelines and the agents: what it does is in 0.1.0 below and in the
+README. Needs gosidian 2.86 or later, which names the project of every
+call and offers a plugin's tools to the agents.
+
+### Fixed
+- **scripts/test.sh** asks for the host's CPUs, at most 8, not 8 always:
+  a runner of GitHub has 4, and Docker refused the tests' container.
+
 ## [0.1.0] — 2026-10-13
 
-The first release: an archive of vectors for the pipelines and the agents.
-Needs gosidian 2.86 or later, which names the project of every call and
-offers a plugin's tools to the agents.
+An archive of vectors for the pipelines and the agents; not published.
 
 ### Added
 - **Three stores**: PostgreSQL with pgvector (`vector` up to 2000
