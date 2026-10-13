@@ -149,8 +149,12 @@ func (p *Plugin) Manifest() map[string]any {
 	if network == nil {
 		network = []string{}
 	}
+	graphs := []any{}
+	for _, name := range []string{"chunks", "docs"} {
+		graphs = append(graphs, map[string]any{"name": name, "description": graphDescriptions[name], "input_schema": graphSchemas[name]})
+	}
 	return map[string]any{"name": p.env.Name, "version": version, "gosidian": 1, "description": desc,
-		"nodes": nodes, "tools": tools, "permissions": map[string]any{"files": false, "network": network}}
+		"nodes": nodes, "tools": tools, "graphs": graphs, "permissions": map[string]any{"files": false, "network": network}}
 }
 
 func result(v any) (*mcp.CallToolResult, error) {
@@ -597,6 +601,8 @@ func (p *Plugin) Handler() http.Handler {
 		schema, _ := json.Marshal(o.input)
 		ms.AddTool(mcp.NewToolWithRawSchema(o.name, o.description, schema), p.handle(o))
 	}
+	ms.AddTool(mcp.NewTool(graphTool, mcp.WithDescription("A graph of the archive, for gosidian's graph views"),
+		mcp.WithString("graph", mcp.Required()), mcp.WithObject("with")), p.handleGraph)
 	mcpH := server.NewStreamableHTTPServer(ms)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

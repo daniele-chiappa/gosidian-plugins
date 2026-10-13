@@ -49,6 +49,30 @@ nodes:
 For an agent, once the owner ran `gosidian plugin expose vec-pg rag`:
 `vec-pg_search({collection: "procedure", query: "…"})`.
 
+## Graphs
+
+From gosidian 2.87 the plugin offers two graphs to the Graph window and
+the ```` ```graph ```` blocks of the projects it is exposed in:
+
+| Graph | Arguments | What it shows |
+|---|---|---|
+| `chunks` | `collection`, `k` (6), `sample` (2000, at most 5000), `color` (`doc`, `level`, `parent`, `meta.<key>`), `layout` (`force`, `pca`) | a sample of the chunks, each linked to its `k` most similar; a click shows the chunk's text and opens its document when it is a note |
+| `docs` | `collection`, `k` (4), `color` (`folder`, `doc`), `layout` | a node per document, the mean of its chunks, linked to the most similar documents |
+
+````markdown
+```graph
+source: vec-pg/chunks
+with: {collection: procedure, k: 8}
+color: doc
+mode: 3d
+```
+````
+
+The neighbours are computed in the plugin, from the sample's vectors.
+The force of the graph places the nodes, and keeps neighbours together;
+`layout: pca` fixes them at the first principal components, which keep far
+fewer of the nearest neighbours.
+
 ## The preset
 
 `/etc/gosidian-database/preset.yaml` (`DB_PRESET`). Three examples in
@@ -152,7 +176,7 @@ CREATE ROLE "q_rag" LOGIN PASSWORD '…';
 ```yaml
 services:
   vec-pg:
-    image: ghcr.io/daniele-chiappa/gosidian-database:0.1.1
+    image: ghcr.io/daniele-chiappa/gosidian-database:0.2.0
     environment:
       DB_NAME: vec-pg                 # the name gosidian registers it with
       GOSIDIAN_PLUGIN_TOKEN: ${VEC_PG_TOKEN}

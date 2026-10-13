@@ -196,6 +196,15 @@ func (e *Embedder) post(ctx context.Context, raw []byte, out any) error {
 	}
 }
 
+// renormalize is v, float32, with length 1 again (halfvec rounds it).
+func renormalize(v []float32) []float32 {
+	f := make([]float64, len(v))
+	for i, x := range v {
+		f[i] = float64(x)
+	}
+	return normalize(f)
+}
+
 // normalize is v with length 1, as float32.
 func normalize(v []float64) []float32 {
 	var n float64

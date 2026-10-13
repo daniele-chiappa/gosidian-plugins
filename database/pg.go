@@ -346,6 +346,30 @@ func (s *pgStore) Delete(ctx context.Context, project string, c Collection, ids 
 	return tag.RowsAffected(), err
 }
 
+func (s *pgStore) Sample(ctx context.Context, project string, c Collection, limit int) ([]Chunk, int64, error) {
+	var total int64
+	if err := s.pool.QueryRow(ctx, `SELECT count(*) FROM `+pgTable(project, c.Name)).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	// md5 of the id orders the chunks at random, and the same way each time.
+	rows, err := s.pool.Query(ctx, `SELECT id, coalesce(doc, ''), coalesce(parent, ''), level, coalesce(title, ''), left(text, 600), meta, updated, embedding::text
+		FROM `+pgTable(project, c.Name)+` ORDER BY md5(id) LIMIT $1`, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	out, err := pgx.CollectRows(rows, func(r pgx.CollectableRow) (Chunk, error) {
+		var vec string
+		ch, err := scanChunk(r, &vec)
+		if err != nil {
+			return ch, err
+		}
+		v, err := parseVectorText(vec)
+		ch.Vector = renormalize(v)
+		return ch, err
+	})
+	return out, total, err
+}
+
 // pgError is a database error as the caller should read it: the message,
 // without the connection details.
 func pgError(err error) error {

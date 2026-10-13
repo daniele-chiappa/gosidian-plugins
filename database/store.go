@@ -67,6 +67,9 @@ type Store interface {
 	Search(ctx context.Context, project string, c Collection, vecs [][]float32, k int, f Filter, withText bool) ([][]Hit, error)
 	Get(ctx context.Context, project string, c Collection, ids []string) ([]Chunk, error)
 	Delete(ctx context.Context, project string, c Collection, ids []string, f Filter) (int64, error)
+	// Sample draws up to limit chunks with their vectors, the same ones
+	// from one call to the next, and the collection's count, for a graph.
+	Sample(ctx context.Context, project string, c Collection, limit int) ([]Chunk, int64, error)
 	Close() error
 }
 

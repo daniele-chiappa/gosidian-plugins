@@ -346,6 +346,33 @@ func (s *qdrantStore) Delete(ctx context.Context, project string, c Collection, 
 	return n, s.do(ctx, s.key, http.MethodPost, "/collections/"+coll+"/points/delete?wait=true", map[string]any{"filter": filter}, nil)
 }
 
+func (s *qdrantStore) Sample(ctx context.Context, project string, c Collection, limit int) ([]Chunk, int64, error) {
+	coll := qdrantCollection(project, c.Name)
+	total, err := s.count(ctx, coll, nil)
+	if err != nil {
+		return nil, 0, err
+	}
+	// The point ids are hashes of the chunks' ids: their order is at random,
+	// and the same each time.
+	var r struct {
+		Points []struct {
+			qdrantPoint
+			Vector []float64 `json:"vector"`
+		} `json:"points"`
+	}
+	if err := s.do(ctx, s.key, http.MethodPost, "/collections/"+coll+"/points/scroll",
+		map[string]any{"limit": limit, "with_payload": true, "with_vector": true}, &r); err != nil {
+		return nil, 0, err
+	}
+	out := make([]Chunk, 0, len(r.Points))
+	for _, p := range r.Points {
+		ch := p.chunk()
+		ch.Vector = normalize(p.Vector)
+		out = append(out, ch)
+	}
+	return out, total, nil
+}
+
 // The operations of a direct query on Qdrant: its API's, on a collection
 // of the project, the reads with read and the payload's changes and the
 // deletes with write.

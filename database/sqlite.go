@@ -408,6 +408,35 @@ func (s *sqliteStore) Delete(ctx context.Context, project string, c Collection, 
 	return res.RowsAffected()
 }
 
+func (s *sqliteStore) Sample(ctx context.Context, project string, c Collection, limit int) ([]Chunk, int64, error) {
+	db, err := s.db(ctx, project)
+	if err != nil {
+		return nil, 0, err
+	}
+	var total int64
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM `+sqliteIdent(c.Name)).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	// A hash of the rowid orders the chunks at random, the same way each time.
+	rows, err := db.QueryContext(ctx, `SELECT id, coalesce(doc, ''), coalesce(parent, ''), level, coalesce(title, ''), substr(text, 1, 600), meta, updated, embedding
+		FROM `+sqliteIdent(c.Name)+` ORDER BY (rowid * 1103515245 + 12345) % 2147483648 LIMIT ?`, limit)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []Chunk
+	for rows.Next() {
+		var b []byte
+		ch, err := sqliteChunk(rows, &b)
+		if err != nil {
+			return nil, 0, err
+		}
+		ch.Vector = renormalize(unblob(b))
+		out = append(out, ch)
+	}
+	return out, total, rows.Err()
+}
+
 // sqliteQuerier runs the direct queries: on the project's own file, with
 // the authorizer of DB_QUERY, read-only (mode=ro and query_only) for read.
 type sqliteQuerier struct {

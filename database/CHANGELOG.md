@@ -4,7 +4,26 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
-## [0.1.1] — 2026-10-13
+## [0.2.0] — 2026-10-13
+
+Maps of an archive, for gosidian's graph views. Needs gosidian 2.87 or
+later for them; the rest works from 2.86.
+
+### Added
+- **Two graphs** (`graphs` in the manifest, read with `gosidian_graph`):
+  - `chunks`: a sample of a collection's chunks (`sample`, 2000 by
+    default, at most 5000, the same ones each time), each linked to its
+    `k` most similar (6 by default), coloured by `doc`, `level`, `parent`
+    or `meta.<key>`; a node carries the chunk's text and its document;
+  - `docs`: a node per document, the mean of its chunks, linked to the
+    most similar documents, coloured by folder.
+
+  The force of gosidian's graph places them, so neighbours stay together;
+  `layout: pca` fixes their places at the first principal components
+  instead, for a small set. The neighbours are computed in the plugin,
+  the same on the three stores.
+
+
 
 The first public release: 0.1.0, with the tests' script fit for a runner
 of 4 CPUs. An archive of vectors on PostgreSQL with pgvector, Qdrant or

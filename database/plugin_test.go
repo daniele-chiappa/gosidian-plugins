@@ -117,6 +117,9 @@ func TestManifest(t *testing.T) {
 	if len(man.Nodes) != len(want) || man.Permissions.Files || strings.Join(man.Permissions.Network, ",") != "ollama,db" {
 		t.Errorf("manifest: %s", b)
 	}
+	if !strings.Contains(string(b), `"graphs":[{"description":"The chunks of a collection`) {
+		t.Errorf("no graphs in the manifest: %s", b)
+	}
 	p.query = nil
 	for _, o := range p.operations() {
 		if o.name == "query" {
