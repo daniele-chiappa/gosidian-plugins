@@ -1,7 +1,7 @@
 # gosidian-pi: a gosidian plugin whose node runs a pi agent (pi.dev) on the
 # files a pipeline hands it. Node runs the TypeScript sources as they are
 # (type stripping): there is no build step.
-FROM node:24-alpine
+FROM node:25-alpine
 
 # ripgrep and fd for pi's grep and find tools (else pi would download them),
 # bash for a preset that allows the bash tool; a user for each slot of
