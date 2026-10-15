@@ -1,4 +1,4 @@
 # torch and torchvision come from the CPU index first (Dockerfile).
 docling==2.132.0
-mcp==1.30.0
+mcp==2.2.0
 uvicorn==0.54.0
