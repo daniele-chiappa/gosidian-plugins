@@ -96,25 +96,41 @@ func TestConfig(t *testing.T) {
 			Store: StoreConfig{Kind: "postgres", URL: "postgres://u@db/x"}}
 	}
 	c := good()
-	if err := c.check(); err != nil || c.DefaultModel != "m" || c.Models[0].Size() != 512 || c.Limits.MaxItems != 500 {
+	if err := c.check(); err != nil || c.DefaultModel != "m" || c.Models[0].Size() != 512 || c.Limits.MaxItems != 500 ||
+		c.Limits.MaxQueries != 32 || c.Limits.MaxResult != 1000<<10 || c.Limits.MaxIn != 1000 || c.Limits.MaxMeta != 16<<10 || c.Limits.MaxUpdateKeys != 64 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	for why, change := range map[string]func(*Config){
-		"base_url":   func(c *Config) { c.Endpoint.BaseURL = "ollama" },
-		"no models":  func(c *Config) { c.Models = nil },
-		"dims":       func(c *Config) { c.Models[0].Dims = 0 },
-		"dimensions": func(c *Config) { c.Models[0].Dimensions = 1024 },
-		"template":   func(c *Config) { c.Models[0].DocumentTemplate = "title: {title}" },
-		"default":    func(c *Config) { c.DefaultModel = "other" },
-		"kind":       func(c *Config) { c.Store.Kind = "mysql" },
-		"pg url":     func(c *Config) { c.Store.URL = "http://db" },
-		"twice":      func(c *Config) { c.Models = append(c.Models, c.Models[0]) },
+		"base_url":               func(c *Config) { c.Endpoint.BaseURL = "ollama" },
+		"no models":              func(c *Config) { c.Models = nil },
+		"dims":                   func(c *Config) { c.Models[0].Dims = 0 },
+		"dimensions":             func(c *Config) { c.Models[0].Dimensions = 1024 },
+		"template":               func(c *Config) { c.Models[0].DocumentTemplate = "title: {title}" },
+		"default":                func(c *Config) { c.DefaultModel = "other" },
+		"kind":                   func(c *Config) { c.Store.Kind = "mysql" },
+		"pg url":                 func(c *Config) { c.Store.URL = "http://db" },
+		"twice":                  func(c *Config) { c.Models = append(c.Models, c.Models[0]) },
+		"meta_index on postgres": func(c *Config) { c.Store.MetaIndex = map[string]string{"status": "keyword"} },
+		"max_result small":       func(c *Config) { c.Limits.MaxResult = 1000 },
+		"ef too wide":            func(c *Config) { c.Store.EF = 5000 },
+		"ef on sqlite":           func(c *Config) { c.Store = StoreConfig{Kind: "sqlite", EF: 100} },
+		"meta_index type": func(c *Config) {
+			c.Store = StoreConfig{Kind: "qdrant", URL: "http://q:6333", MetaIndex: map[string]string{"status": "text"}}
+		},
+		"meta_index key": func(c *Config) {
+			c.Store = StoreConfig{Kind: "qdrant", URL: "http://q:6333", MetaIndex: map[string]string{"a.b": "keyword"}}
+		},
 	} {
 		c := good()
 		change(c)
 		if err := c.check(); err == nil {
 			t.Errorf("%s: accepted", why)
 		}
+	}
+	c = good()
+	c.Store = StoreConfig{Kind: "qdrant", URL: "http://q:6333", EF: 128, MetaIndex: map[string]string{"status": "keyword", "dal": "integer", "al": "integer"}}
+	if err := c.check(); err != nil {
+		t.Errorf("meta_index on qdrant: %v", err)
 	}
 	env := func(kv ...string) func(string) string {
 		m := map[string]string{}

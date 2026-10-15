@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -74,6 +77,35 @@ func (m Model) Size() int {
 	return m.Dims
 }
 
+// fingerprint is a digest of what makes the model's vector of a document:
+// the model asked (id), the size and where it is cut, the template, the
+// cut of the text and the body of the request (the model's, else the
+// endpoint's). A collection names its model only by name, which the
+// installer may define again: a stored chunk keeps its embedding only
+// under the same fingerprint, so a changed definition embeds it again
+// instead of mixing two spaces of vectors in a collection. The query
+// prefix is not in it: it changes the questions, not what is stored.
+func (m Model) fingerprint(ep Endpoint) string {
+	body := ep.Body
+	if m.Body != nil {
+		body = m.Body
+	}
+	// A body JSON cannot write fails the requests too: any digest will do.
+	b, _ := json.Marshal(struct {
+		ID       string         `json:"id"`
+		Size     int            `json:"size"`
+		Send     bool           `json:"send_dimensions"`
+		Template string         `json:"document_template"`
+		MaxChars int            `json:"max_chars"`
+		Body     map[string]any `json:"body"`
+	}{m.ID, m.Size(), m.SendDimensions && m.Dimensions > 0, m.DocumentTemplate, m.MaxChars, body})
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
+}
+
+// fingerprintFormat is a fingerprint as list gives it.
+var fingerprintFormat = regexp.MustCompile(`^[0-9a-f]{16}$`)
+
 // StoreConfig is the database.
 type StoreConfig struct {
 	// Kind is postgres, qdrant or sqlite.
@@ -85,13 +117,39 @@ type StoreConfig struct {
 	Path string `yaml:"path"`
 	// Extension is sqlite-vec's loadable extension.
 	Extension string `yaml:"extension"`
+	// MetaIndex (Qdrant) names keys of the chunks' meta the filters use,
+	// with their type (keyword, integer, float, bool): Qdrant indexes them,
+	// and a search with a filter on them then follows the filter inside its
+	// HNSW graph and plans its search from the index.
+	MetaIndex map[string]string `yaml:"meta_index"`
+	// EF is the breadth of an HNSW search that asks for none (Postgres
+	// hnsw.ef_search, Qdrant hnsw_ef), 1 to 1000; 0 keeps the built-in
+	// max(40, 2k) and max(64, 2k).
+	EF int `yaml:"ef"`
 }
+
+// metaIndexTypes are the payload indexes a key of the meta may have.
+var metaIndexTypes = map[string]bool{"keyword": true, "integer": true, "float": true, "bool": true}
 
 // Limits cap a call.
 type Limits struct {
-	MaxItems int `yaml:"max_items"` // chunks per upsert, get or delete
+	MaxItems int `yaml:"max_items"` // chunks per upsert, get, update or delete (by id)
+	MaxList  int `yaml:"max_list"`  // chunks per page of list
 	MaxText  int `yaml:"max_text"`  // characters of a chunk's text
 	MaxK     int `yaml:"max_k"`     // results per question
+	// MaxQueries are the texts one search takes (queries).
+	MaxQueries int `yaml:"max_queries"`
+	// MaxResult caps the bytes of one result: gosidian takes up to its
+	// [pipelines] max_output_bytes of a node's output (1 MiB by default),
+	// so the two go up together.
+	MaxResult int `yaml:"max_result"`
+	// MaxIn are the values of one in of a filter.
+	MaxIn int `yaml:"max_in"`
+	// MaxMeta caps the bytes of a chunk's meta as JSON: an upsert's, and
+	// what an update makes of it.
+	MaxMeta int `yaml:"max_meta"`
+	// MaxUpdateKeys are the keys one update sets or removes.
+	MaxUpdateKeys int `yaml:"max_update_keys"`
 }
 
 // Duration is a time.Duration written as "30s".
@@ -173,6 +231,23 @@ func (c *Config) check() error {
 	if _, ok := c.Model(c.DefaultModel); !ok {
 		return fmt.Errorf("default_model %q is no model of the preset", c.DefaultModel)
 	}
+	switch {
+	case c.Store.EF < 0 || c.Store.EF > 1000:
+		return fmt.Errorf("store.ef: %d, 1 to 1000 (0 the built-in breadth)", c.Store.EF)
+	case c.Store.EF > 0 && c.Store.Kind == "sqlite":
+		return errors.New("store.ef: SQLite compares every chunk, it has no index to widen")
+	}
+	if len(c.Store.MetaIndex) > 0 && c.Store.Kind != "qdrant" {
+		return errors.New("store.meta_index: only Qdrant indexes keys of the meta")
+	}
+	for k, typ := range c.Store.MetaIndex {
+		switch {
+		case !metaKey.MatchString(k):
+			return fmt.Errorf("store.meta_index: %q is no key of the meta (letters, digits, _ and -)", k)
+		case !metaIndexTypes[typ]:
+			return fmt.Errorf("store.meta_index.%s: %q; keyword, integer, float or bool", k, typ)
+		}
+	}
 	switch c.Store.Kind {
 	case "postgres":
 		if u, err := url.Parse(c.Store.URL); err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
@@ -195,11 +270,32 @@ func (c *Config) check() error {
 	if c.Limits.MaxItems <= 0 {
 		c.Limits.MaxItems = 500
 	}
+	if c.Limits.MaxList <= 0 {
+		c.Limits.MaxList = 5000
+	}
 	if c.Limits.MaxText <= 0 {
 		c.Limits.MaxText = 32 << 10
 	}
 	if c.Limits.MaxK <= 0 {
 		c.Limits.MaxK = 100
+	}
+	if c.Limits.MaxQueries <= 0 {
+		c.Limits.MaxQueries = 32
+	}
+	if c.Limits.MaxIn <= 0 {
+		c.Limits.MaxIn = 1000
+	}
+	if c.Limits.MaxMeta <= 0 {
+		c.Limits.MaxMeta = 16 << 10
+	}
+	if c.Limits.MaxUpdateKeys <= 0 {
+		c.Limits.MaxUpdateKeys = 64
+	}
+	switch {
+	case c.Limits.MaxResult == 0:
+		c.Limits.MaxResult = 1000 << 10
+	case c.Limits.MaxResult < 64<<10 || c.Limits.MaxResult > 256<<20:
+		return fmt.Errorf("limits.max_result: %d bytes, from 65536 to 268435456", c.Limits.MaxResult)
 	}
 	if c.Endpoint.Timeout <= 0 {
 		c.Endpoint.Timeout = Duration(2 * time.Minute)

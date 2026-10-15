@@ -21,12 +21,15 @@ compare stores or models.
 
 | Node / tool | Access | What it does |
 |---|---|---|
-| `upsert` | write | chunks → embeddings → store; it creates the collection with the model on first use (`model`, default the preset's). A chunk whose `id` is stored replaces it. Reports `usage: {embedding_tokens, cost}` |
-| `search` | read | the chunks most similar to `query` (or up to 32 `queries`), `k` each, with a `filter` on `doc`, `parent`, `level` and `meta`, and `min_score`; scores are cosine similarities |
+| `upsert` | write | chunks → embeddings → store; it creates the collection with the model on first use (`model`, default the preset's). A chunk whose `id` is stored replaces it, and keeps its embedding when its text and title are the same, and so is the [definition of its model](#a-models-definition) (`reembed: true` embeds it again). A chunk with a `vector` (its embedding, made already, with the `fingerprint` that came with it) is stored with it, without the model ([copying a collection](#copying-a-collection)). Reports `embedded`, `kept`, `given` and `usage: {embedding_tokens, cost}` |
+| `search` | read | the chunks most similar to `query` (or several `queries`, up to `limits.max_queries`, 32), `k` each, with a [`filter`](#filters) and `min_score`; scores are cosine similarities. `ms` gives the time of the model (`embed`) and of the store (`search`) apart. `ef` (1 to 1000) sets the breadth of the HNSW search, more finding more and slower (PostgreSQL `hnsw.ef_search`, by default max(40, 2k), at most 1000; Qdrant `hnsw_ef`, max(64, 2k)). `exact: true` compares the text with every chunk the filter keeps instead of going through the index (PostgreSQL turns its index scans off, Qdrant searches exactly, SQLite always does): slower, the reference an index's results are measured against |
 | `get` | read | chunks by `ids` |
-| `delete` | write | chunks by `ids`, by `filter`, or both |
+| `list` | read | the chunks of a [`filter`](#filters), `limit` at a time (100 by default, at most `max_list`, 5000), without their text unless `with_text`, and with only the `fields` named (`id`, `meta.<key>`…) when given; with `vectors: true` their embeddings too (`vector`, as stored, and the `fingerprint` of the model's definition that made it, at most `max_items` chunks a page), and the collection's `model` and `dims`. A page holds the chunks that fit in one result gosidian takes (1 MB): with vectors or long texts, fewer than `limit`. `cursor` is the `next` of the page before, empty after the last. The first page, without `cursor`, gives `total`, the chunks of the filter: a count is a pass over the filter, which the later pages do not repeat. In order of id; in Qdrant, of point |
+| `update` | write | changes keys of the `meta` of chunks, by `ids`, by [`filter`](#filters), or both: each key is set to its value, `null` removes it, up to `limits.max_update_keys` (64) keys. The text and the embeddings stay. An update that would make a chunk's meta larger than `limits.max_meta` changes nothing; one that makes it smaller passes ([all or in part](#all-or-in-part)) |
+| `delete` | write | chunks by `ids`, by [`filter`](#filters), or both |
 | `collections` | read | the project's collections, with model, size and chunks; with `name`, one |
 | `drop` | write | a collection and its chunks |
+| `copy` | write | the chunks of `collection`, or those of a [`filter`](#filters), with their embeddings as stored, into the collection `to` of this archive, made with the same model and size (or one that has them): no model is called. A part of a collection becomes a collection of its own, the paragraphs of a cut on several levels say. It goes a page at a time ([all or in part](#all-or-in-part)). Between two archives, `list` with `vectors` and `upsert` ([copying a collection](#copying-a-collection)) |
 | `query` | read or write | a direct query, only with `DB_QUERY` on ([below](#direct-queries)) |
 
 A collection has one model and one size: a call with another model is
@@ -48,6 +51,91 @@ nodes:
 
 For an agent, once the owner ran `gosidian plugin expose vec-pg rag`:
 `vec-pg_search({collection: "procedure", query: "…"})`.
+
+### All or in part
+
+An `update` on PostgreSQL or SQLite is one statement: it changes all the
+chunks it finds, or none. On Qdrant it goes 1000 points at a time: one
+that fails leaves the pages before it changed, and its error says how
+many; the same `update` again finishes it, as setting a key twice sets it
+once. An update that would make a meta too large is refused before it
+changes anything, on the three stores.
+
+A `copy` goes `limits.max_items` chunks at a time, on the three stores:
+one that fails leaves in `to` the chunks it copied before, and its error
+says how many. Copy again, the same `collection` and `filter`, to finish
+it (a chunk with an id `to` has is replaced), or `drop` `to` and copy
+again.
+
+## Filters
+
+`search`, `list`, `update` and `delete` take a `filter`, every field of
+which must hold: `doc` and `parent` (a string or a list), `level` (a number
+or a list), and `meta`, the top-level keys of the chunks' meta. A key holds
+a value, which it must equal, or an object of operators:
+
+| Operator | Holds when the key |
+|---|---|
+| `eq` | equals the value |
+| `ne` | does not equal it, or the chunk has no such key |
+| `in` | equals one of a list of values (at most `limits.max_in`, 1000) |
+| `gt`, `gte`, `lt`, `lte` | is a number greater, at least, less, at most the value; a key that is no number fails it |
+
+```json
+{"doc": "guide/pane.md", "meta": {"status": "active", "since": {"lte": 1791970000}, "kind": {"in": ["text", "table"]}}}
+```
+
+A key with operators, and a key `update` sets, are letters, digits, `_`
+and `-`.
+
+### Versions of the chunks
+
+The plugin keeps no history of its own, but the meta can: a caller that
+cuts its documents again keeps the old chunks, closed, beside the new ones.
+
+- Each chunk's id holds its version (`<part>@<version>`), so a new one
+  does not replace the old.
+- Its meta holds `status` (`active`, `superseded`), and the dates in
+  seconds from (`since`) and until (`until`, a far date while active)
+  which it holds.
+- A new cut upserts the chunks whose text changed (`list` with
+  `with_text`, or a hash in the meta, tells which), and `update` closes
+  the old ones: `{"status": "superseded", "until": <date>}`.
+- The current state is `{"meta": {"status": "active"}}`; the state at a
+  date `d` is `{"meta": {"since": {"lte": d}, "until": {"gt": d}}}`, for a
+  search or a list. A test asked at two dates compares two states of the
+  archive.
+
+### Copying a collection
+
+Two archives with the same model hold the same vectors, and compare their
+stores: copying a collection costs no model. A model run again gives about
+the same numbers (Qwen3-Embedding-8B on Ollama, twice on 74,367 chunks:
+differences of 2.5e-8 at most), so the copy saves time, not precision. It
+also gives a smaller size of a Matryoshka model without the model: the
+first numbers of the larger vectors, which upsert makes length 1 again.
+
+- `list` with `vectors: true` and `with_text: true` on the archive that
+  has it gives the chunks with their `vector` and `fingerprint`, and the
+  collection's `model` and `dims`: as many as fit in a result, about 70 of
+  1024 numbers with their text;
+- `upsert` of that page, as it is, on the other archive, with `model` set
+  to the same model of its preset: each chunk with a `vector` is stored
+  with it and its `fingerprint`, and counted in `given`. The vector must
+  have the collection's `dims` numbers; one of length 1, as an archive's
+  are, is kept number for number, another is made length 1. A vector that
+  cannot be made length 1 (zeros, or numbers too small or too large to
+  square) is refused.
+
+The fingerprint tells a later upsert of the same text whether the vector
+is one the preset's model would make ([below](#a-models-definition)): the
+same definition in the two presets keeps it, another embeds it again. A
+vector given without one is embedded again on its next upsert.
+
+Postgres gives its vectors in their shortest exact form and SQLite and
+Qdrant as float32, so a copy among the three searches as the original:
+the same chunks with the same scores. A collection kept as `halfvec` (over
+2000 numbers) gives its rounded numbers.
 
 ## Graphs
 
@@ -98,13 +186,47 @@ default_model: embeddinggemma
 store:
   kind: postgres           # postgres, qdrant or sqlite
   url: postgres://gosidian@postgres:5432/vectors
-limits: {max_items: 500, max_text: 32768, max_k: 100}
+  # meta_index: {status: keyword, since: integer}   # Qdrant: the meta keys its filters use
+limits: {max_items: 500, max_list: 5000, max_text: 32768, max_k: 100, max_queries: 32, max_result: 1024000,
+         max_in: 1000, max_meta: 16384, max_update_keys: 64}
 ```
+
+**The limits** are the installer's to set. `max_items` chunks per write
+or get, `max_list` per page of `list`, `max_text` characters of a chunk,
+`max_k` results and `max_queries` texts per search; `max_result` bytes of
+one result, which follows gosidian's `[pipelines] max_output_bytes` (1 MiB
+by default): raise the two together for larger steps. `max_in` values of
+an `in` of a [filter](#filters); `max_meta` bytes of a chunk's meta as
+JSON, an upsert's and what an `update` makes of it (PostgreSQL measures
+an update's as it writes jsonb, a space after each `:` and `,`);
+`max_update_keys` keys one `update` sets or removes.
 
 **Prefixes matter.** No endpoint adds them. On a bench of Italian
 documents (2026-10-12), EmbeddingGemma without its prefix lost 5 points
 of MRR, and Qwen3-Embedding with an instruction other than its own lost
 8. The example presets carry the prefixes measured there.
+
+### A model's definition
+
+A collection names its model, and the preset defines it. Each chunk
+keeps, with its vector, a fingerprint of the definition that made it: the
+model's `id`, the size of its vectors and where they are cut (`dims`,
+`dimensions`, `send_dimensions`), `document_template`, `max_chars`, and
+the `body` of its requests (the model's, else the endpoint's). An upsert
+keeps a stored chunk's embedding only when its text, its title and that
+fingerprint are the same.
+
+Change one of them in the preset, a better template say, and upsert the
+documents again: every chunk is embedded again, those whose text is the
+same too, so a collection does not hold vectors of two definitions side by
+side. `query_prefix` is not in it: it makes the questions, not what is
+stored. Nor is `endpoint.base_url`: the same model served elsewhere in
+another way (another quantization) wants `reembed: true`.
+
+Chunks stored before 0.3.0 have no fingerprint: what made them is
+unknown, and they are embedded again on their next upsert, once, as every
+upsert did before. A collection made before gets the column on its first
+use (PostgreSQL), or when its project's file opens (SQLite).
 
 ## The stores
 
@@ -116,6 +238,33 @@ of MRR, and Qwen3-Embedding with an instruction other than its own lost
 
 A bench of 100,000 vectors (1024 numbers) found a search in 1.7 ms with
 Qdrant, 4.3 ms with pgvector and 205 ms with sqlite-vec.
+
+**Filters in Qdrant.** Qdrant follows a filter inside its HNSW graph, and
+plans a search from the filter's size, for the payload keys it has an
+index of. The plugin indexes `chunk_id`, `doc`, `parent` and `level`; the
+keys of the meta a caller filters on, the dates of [versions](#versions-of-the-chunks)
+say, it indexes when the preset names them, with their type (`keyword`,
+`integer`, `float`, `bool`):
+
+```yaml
+store:
+  kind: qdrant
+  url: http://qdrant:6333
+  meta_index: {status: keyword, since: integer, until: integer}
+  ef: 128          # the breadth of a search that asks for none
+```
+
+`store.ef` (Postgres and Qdrant) is the breadth of an HNSW search when
+`search` gives no `ef`: more finds more, slower. Without it Postgres
+searches with max(40, 2k), at most 1000, the widest pgvector takes, and
+Qdrant with max(64, 2k). On 62,357 paragraphs of a manual (1024 and 2048
+numbers), Qdrant found 98% of what the exact search finds at 64 and 99%
+at 128, for a tenth of a millisecond more; Postgres 96-97% at 40 and
+98-99% at 100. Postgres at 400 read the whole table, as an exact search.
+
+A new collection gets them when it is made; one made before, on its first
+use after the plugin starts. PostgreSQL and SQLite read the meta without
+an index, so the setting is Qdrant's only.
 
 The PostgreSQL role of `store.url` (password `DB_PASSWORD`) owns the
 schemas it makes. It creates the extension `vector`, unless whoever runs
@@ -176,7 +325,7 @@ CREATE ROLE "q_rag" LOGIN PASSWORD '…';
 ```yaml
 services:
   vec-pg:
-    image: ghcr.io/daniele-chiappa/gosidian-database:0.2.0
+    image: ghcr.io/daniele-chiappa/gosidian-database:0.3.0
     environment:
       DB_NAME: vec-pg                 # the name gosidian registers it with
       GOSIDIAN_PLUGIN_TOKEN: ${VEC_PG_TOKEN}

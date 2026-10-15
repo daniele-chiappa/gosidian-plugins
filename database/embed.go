@@ -137,6 +137,11 @@ func (e *Embedder) request(ctx context.Context, m Model, batch []string) ([][]fl
 			return nil, Usage{}, fmt.Errorf("embeddings with %s: a vector of %d numbers, the preset says %d", m.Name, len(d.Embedding), m.Size())
 		}
 		vecs[d.Index] = normalize(d.Embedding[:m.Size()])
+		// A vector of zeros, or one whose squares overflowed, has no
+		// direction: stored, its cosine is NaN and spoils the searches.
+		if !unitLength(vecs[d.Index]) {
+			return nil, Usage{}, fmt.Errorf("embeddings with %s: the vector of text %d of the batch cannot be made length 1 (zeros, or numbers too small or too large)", m.Name, d.Index+1)
+		}
 	}
 	u := Usage{Tokens: resp.Usage.PromptTokens}
 	if u.Tokens == 0 {
@@ -203,6 +208,17 @@ func renormalize(v []float32) []float32 {
 		f[i] = float64(x)
 	}
 	return normalize(f)
+}
+
+// unitLength tells whether v, as the stores keep it, has a length about 1
+// (0.5 to 1.5): normalize gives zeros for a vector of zeros, and for one
+// whose squares overflow or underflow float64.
+func unitLength(v []float32) bool {
+	var n float64
+	for _, x := range v {
+		n += float64(x) * float64(x)
+	}
+	return n >= 0.25 && n <= 2.25
 }
 
 // normalize is v with length 1, as float32.

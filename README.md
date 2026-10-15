@@ -9,8 +9,9 @@ is called, the files it gives back) is gosidian's
 
 | Plugin | What it does | Image |
 |---|---|---|
-| [database](database/) | `<archive>.upsert`, `search`, `get`, `delete`, `collections`, `drop`, `query`: chunks and their embeddings in PostgreSQL with pgvector, Qdrant or SQLite with sqlite-vec, the embeddings from a preset (Ollama, llama.cpp, OpenRouter…); nodes for the pipelines, tools for the agents (gosidian 2.86) and graphs of its chunks for the graph views (2.87); one container per archive | `ghcr.io/daniele-chiappa/gosidian-database` (amd64) |
+| [database](database/) | `<archive>.upsert`, `search`, `get`, `list`, `update`, `delete`, `collections`, `drop`, `copy`, `query`: chunks and their embeddings in PostgreSQL with pgvector, Qdrant or SQLite with sqlite-vec, the embeddings from a preset (Ollama, llama.cpp, OpenRouter…); nodes for the pipelines, tools for the agents (gosidian 2.86) and graphs of its chunks for the graph views (2.87); one container per archive | `ghcr.io/daniele-chiappa/gosidian-database` (amd64) |
 | [docling](docling/) | `docling.convert`: PDF, DOCX, XLSX, PPTX, HTML, images and the older office formats to markdown, the pictures as files | `ghcr.io/daniele-chiappa/gosidian-docling` (amd64) |
+| [images](images/) | `images.convert`, and the tool `images_convert` for the agents (gosidian 2.89): images converted without loss, a PNG optimized with oxipng (the default) or WebP, TIFF to PNG, scaled down on request with libvips | `ghcr.io/daniele-chiappa/gosidian-images` (amd64) |
 | [pi](pi/) | `<agent>.run`: a pi agent (pi.dev) on a task and its files, in several turns with tools, answering with text or JSON; one container per agent and preset (a local GPU, OpenRouter…) | `ghcr.io/daniele-chiappa/gosidian-pi` (amd64) |
 | [storage](storage/) | no nodes: sources for the IN folders (gosidian 2.82), a WebDAV folder (Nextcloud), an S3 bucket, a Google Drive folder or a local one, read with rclone | `ghcr.io/daniele-chiappa/gosidian-storage` (amd64, arm64) |
 

@@ -1,0 +1,141 @@
+name: images
+# A PR, or a push that touches images/, tests the plugin with Alpine's
+# libvips, oxipng and cwebp. A tag images/vX.Y.Z builds its image for amd64,
+# tries it (a PNG converted through its tool), pushes it to GHCR as :X.Y.Z
+# and :latest, and makes the release with its section of images/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["images/**", ".github/workflows/images.yml"]
+    tags: ["images/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-images
+
+jobs:
+  test:
+    name: Test the images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Vet and test (Alpine, with the programs of the image)
+        run: sh images/scripts/test.sh
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/images/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#images/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            images/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "images/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and try the image
+        # The version comes from the tag's name: through the environment,
+        # never pasted into the script.
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker build --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" -t "$BASE:$VERSION" images/
+          # A PNG of one pixel, which the plugin fetches by reference as from
+          # gosidian: the runner serves it, and the container shares its
+          # network.
+          mkdir -p "$RUNNER_TEMP/files"
+          echo 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==' \
+            | base64 -d > "$RUNNER_TEMP/files/smoke.png"
+          python3 -m http.server 8001 --bind 127.0.0.1 --directory "$RUNNER_TEMP/files" >/dev/null 2>&1 &
+          docker run -d --name images-smoke --network host --read-only --tmpfs /tmp -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            "$BASE:$VERSION"
+          for _ in $(seq 1 30); do
+            if docker exec images-smoke /usr/local/bin/gosidian-images healthcheck 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec images-smoke wget -qO- http://127.0.0.1:8000/health | tee "$RUNNER_TEMP/health.json"
+          grep -q "\"version\":\"$VERSION\"" "$RUNNER_TEMP/health.json"
+          docker exec images-smoke test -s /licenses/go-modules/INDEX
+          docker exec images-smoke grep -q '^vips-' /licenses/PROGRAMS
+          for tool in vips vipsheader oxipng cwebp; do docker exec images-smoke which "$tool"; done
+          # The PNG converted to WebP through the tool, as gosidian calls it:
+          # a session, then the call; the WebP comes back as a file.
+          mcp() {
+            curl -fsS http://127.0.0.1:8000/mcp -H 'Authorization: Bearer smoke' -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' "$@"
+          }
+          mcp -D "$RUNNER_TEMP/session.txt" -o /dev/null \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+          SESSION=$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d: *//p' "$RUNNER_TEMP/session.txt" | tr -d '\r')
+          SUM=$(sha256sum "$RUNNER_TEMP/files/smoke.png" | cut -d' ' -f1)
+          mcp -H "Mcp-Session-Id: $SESSION" -H 'MCP-Protocol-Version: 2025-06-18' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"convert","arguments":{"files":{"name":"smoke.png","sha256":"'"$SUM"'","url":"http://127.0.0.1:8001/smoke.png"},"format":"webp","only_if_smaller":false}}}' \
+            | tee "$RUNNER_TEMP/convert.txt"
+          grep -q '"converted":1' "$RUNNER_TEMP/convert.txt"
+          grep -q '"uri":"file:///smoke.webp"' "$RUNNER_TEMP/convert.txt"
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker tag "$BASE:$VERSION" "$BASE:latest"
+          docker push "$BASE:$VERSION"
+          docker push "$BASE:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "images $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`$BASE:$VERSION\` (amd64)"
+            echo "- \`$BASE:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f images-smoke || true

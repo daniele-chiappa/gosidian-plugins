@@ -18,6 +18,22 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # images: Go modules
+  - package-ecosystem: "gomod"
+    directory: "/images"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "images"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # docling: Python packages (requirements.txt; torch is in the Dockerfile)
   - package-ecosystem: "pip"
     directory: "/docling"
@@ -68,7 +84,7 @@ updates:
 
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi", "/database"]
+    directories: ["/storage", "/docling", "/pi", "/database", "/images"]
     schedule:
       interval: "weekly"
       day: "monday"

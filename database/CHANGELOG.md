@@ -4,6 +4,99 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.3.0] — 2026-10-15
+
+Versions of the chunks, kept in their meta: the operators to find the
+state at a date, a page at a time, and changes of the meta in place.
+
+### Added
+- **Operators in the filters** on `meta`: `eq`, `ne` (a chunk without the
+  key holds it too), `in` (a list), and `gt`, `gte`, `lt`, `lte` for
+  numbers, `{"since": {"lte": 1791970000}}`, in `search`, `delete` and the
+  new operations. A value alone is still the value a key must have.
+- **`list`** (read): the chunks of a filter, a page at a time with a
+  cursor, with `total` on the first page (a count is a pass over the
+  filter, which the later pages do not repeat), without their text unless
+  `with_text`; a page holds up to `limits.max_list` (5000), so a
+  document's chunks fit in one, and `fields` keeps only the fields named
+  (`id`, `meta.<key>`), so they fit in the result.
+- **`update`** (write): sets or removes (`null`) keys of the meta of
+  chunks by id or filter, keeping their text and embeddings. One that
+  would make a chunk's meta larger than `limits.max_meta` changes
+  nothing. On PostgreSQL and SQLite it is one statement; on Qdrant it goes
+  1000 points at a time, and one that fails says how many it changed.
+- **Copying a collection without the model**: `list` with `vectors: true`
+  gives the chunks' embeddings as stored (at most `limits.max_items` a
+  page) with the collection's `model` and `dims` and each chunk's
+  `fingerprint`, and `upsert` stores a chunk that has a `vector` with it
+  and its `fingerprint`, counted in `given`. A vector given that is not
+  finite numbers, or cannot be made length 1 (zeros, or numbers whose
+  squares overflow or underflow), is refused. A collection then goes to
+  another archive without the model, and a smaller size of a Matryoshka
+  model is the first numbers of the larger vectors.
+- **More limits of the preset**, the installer's to set: `limits.max_queries`
+  (32, the texts of one search), `limits.max_result` (1,024,000 bytes, a
+  result), which follows gosidian's `[pipelines] max_output_bytes`,
+  `limits.max_in` (1000, the values of an `in`), `limits.max_update_keys`
+  (64, the keys of one `update`) and `limits.max_meta` (16,384 bytes of
+  JSON, a chunk's meta, the 16 KiB fixed before, which an `update` now
+  checks too).
+- **`copy`** (write): the chunks of a collection, or of a filter, with their
+  embeddings and fingerprints into another collection of the same archive,
+  made with the same model and size; no model is called. It goes a page at
+  a time: one that fails leaves the chunks copied before, and says how
+  many; a copy again completes it.
+- **`store.ef`**: the breadth of a search that asks for no `ef`, the
+  installer's to set (Postgres and Qdrant; 0 keeps the built-in one).
+- **`search` with `ef`**: the breadth of the HNSW search, to trade time
+  for what an index finds (PostgreSQL `hnsw.ef_search`, Qdrant `hnsw_ef`).
+- **`search` gives its times**: `ms` with the model's (`embed`) and the
+  store's (`search`), so a comparison of archives or indexes reads the
+  second alone.
+- **`search` with `exact: true`**: the text against every chunk the filter
+  keeps, not through the index, as the reference an index's results are
+  measured against: PostgreSQL turns its index scans off (and skips the
+  binary quantization of the vectors over 4000 numbers), Qdrant searches
+  exactly, SQLite always did.
+- **`store.meta_index`** (Qdrant): the keys of the meta the filters use,
+  with their type (`keyword`, `integer`, `float`, `bool`), get a payload
+  index, so Qdrant follows a filter on them inside its HNSW graph: a new
+  collection when it is made, an older one on its first use.
+- **A page of `list` fits in a result**: chunks with their vectors or
+  long texts that would pass 1 MB make a shorter page, whose `next` goes
+  on from the first left out.
+- **The README** tells how to keep versions of the chunks with these, and
+  how to copy a collection.
+
+### Fixed
+- **A search in PostgreSQL goes through the HNSW index every time**: after
+  five runs of the search's statement Postgres could keep a generic plan,
+  which, not knowing a filter's value on the meta, read every chunk it
+  kept through the meta's index and sorted them all, an exact search of
+  the collection. Each search is planned with its own values
+  (`plan_cache_mode = force_custom_plan`).
+- **SQLite keeps its temporary files in memory**: a sort of large rows,
+  chunks with their vectors and texts, spilled to a file, which the
+  read-only image cannot write ("disk I/O error: permission denied").
+- **A search in PostgreSQL with `k` over 500**, under a `limits.max_k`
+  raised, failed: its breadth, 2k, passed the 1000 pgvector takes. It
+  stays within 1000 now. The breadth is a parameter of one statement, no
+  longer a statement prepared again for each value.
+- **An endpoint's vector of zeros is refused**, with the batch it came in,
+  instead of stored: its cosine, NaN, spoiled the searches that met it.
+
+### Changed
+- **`upsert` keeps the embedding** of a stored chunk whose text and title
+  are the same, and whose model the preset defines as when it was
+  embedded: only the others go to the model, and the result counts
+  `embedded` and `kept`. `reembed: true` embeds them all again. Each chunk
+  keeps a fingerprint of the model's definition (its `id`, size and cut,
+  `document_template`, `max_chars` and the `body` of its requests), so a
+  definition changed under the same name embeds the chunks again instead
+  of leaving vectors of two definitions in a collection. A collection made
+  before gets the fingerprint's column on its first use; its chunks have
+  none, and are embedded again on their next upsert, once.
+
 ## [0.2.0] — 2026-10-13
 
 Maps of an archive, for gosidian's graph views. Needs gosidian 2.87 or
@@ -24,6 +117,7 @@ later for them; the rest works from 2.86.
   the same on the three stores.
 
 
+## [0.1.1] — 2026-10-13
 
 The first public release: 0.1.0, with the tests' script fit for a runner
 of 4 CPUs. An archive of vectors on PostgreSQL with pgvector, Qdrant or

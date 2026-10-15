@@ -59,6 +59,11 @@ jobs:
         working-directory: storage
         run: go build ./...
 
+      - name: Build images
+        if: matrix.build-mode == 'manual'
+        working-directory: images
+        run: go build ./...
+
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:

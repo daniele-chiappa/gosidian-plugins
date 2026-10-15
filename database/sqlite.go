@@ -10,7 +10,6 @@ import (
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -47,12 +46,33 @@ const sqliteRecursive = 33
 
 func registerSQLite(ext string) {
 	registerDrivers.Do(func() {
-		sql.Register(driverSQLite, &sqlite3.SQLiteDriver{Extensions: []string{ext}})
+		sql.Register(driverSQLite, &sqlite3.SQLiteDriver{Extensions: []string{ext}, ConnectHook: sqliteTempInMemory})
 		sql.Register(driverSQLiteRead, &sqlite3.SQLiteDriver{Extensions: []string{ext},
-			ConnectHook: func(c *sqlite3.SQLiteConn) error { c.RegisterAuthorizer(sqliteAuthorizer(false)); return nil }})
+			ConnectHook: func(c *sqlite3.SQLiteConn) error {
+				if err := sqliteTempInMemory(c); err != nil {
+					return err
+				}
+				c.RegisterAuthorizer(sqliteAuthorizer(false))
+				return nil
+			}})
 		sql.Register(driverSQLiteWrite, &sqlite3.SQLiteDriver{Extensions: []string{ext},
-			ConnectHook: func(c *sqlite3.SQLiteConn) error { c.RegisterAuthorizer(sqliteAuthorizer(true)); return nil }})
+			ConnectHook: func(c *sqlite3.SQLiteConn) error {
+				if err := sqliteTempInMemory(c); err != nil {
+					return err
+				}
+				c.RegisterAuthorizer(sqliteAuthorizer(true))
+				return nil
+			}})
 	})
+}
+
+// sqliteTempInMemory keeps SQLite's temporary files in memory: a sort of
+// large rows (chunks with their vectors and texts) spills to them, and the
+// image runs on a read-only file system, where it failed as "disk I/O
+// error: permission denied".
+func sqliteTempInMemory(c *sqlite3.SQLiteConn) error {
+	_, err := c.Exec("PRAGMA temp_store = MEMORY", nil)
+	return err
 }
 
 // sqliteAuthorizer lets a direct query read, and with write change rows:
@@ -107,8 +127,42 @@ func (s *sqliteStore) db(ctx context.Context, project string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
+	if err := sqliteAddColumns(ctx, db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	s.dbs[project] = db
 	return db, nil
+}
+
+// sqliteAddColumns gives the tables of a project's file the columns of this
+// version, when the file opens: one made before 0.3.0 has no fingerprint,
+// which a NULL then fills.
+func sqliteAddColumns(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, `SELECT name FROM _collections WHERE NOT EXISTS
+		(SELECT 1 FROM pragma_table_info(_collections.name) WHERE name = 'fingerprint')`)
+	if err != nil {
+		return err
+	}
+	var old []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return err
+		}
+		old = append(old, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, name := range old {
+		if _, err := db.ExecContext(ctx, `ALTER TABLE `+sqliteIdent(name)+` ADD COLUMN fingerprint TEXT`); err != nil {
+			return fmt.Errorf("adding the fingerprint of the vectors to %s: %w", name, err)
+		}
+	}
+	return nil
 }
 
 func (s *sqliteStore) Close() error {
@@ -177,7 +231,7 @@ func (s *sqliteStore) Create(ctx context.Context, project string, c Collection) 
 	defer tx.Rollback()
 	for _, q := range []string{
 		`CREATE TABLE ` + t + ` (id TEXT PRIMARY KEY, doc TEXT, parent TEXT, level INTEGER NOT NULL DEFAULT 0,
-			title TEXT, text TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', updated TEXT NOT NULL, embedding BLOB NOT NULL)`,
+			title TEXT, text TEXT NOT NULL, meta TEXT NOT NULL DEFAULT '{}', updated TEXT NOT NULL, embedding BLOB NOT NULL, fingerprint TEXT)`,
 		`CREATE INDEX ` + sqliteIdent(c.Name+"_doc") + ` ON ` + t + ` (doc)`,
 		`CREATE INDEX ` + sqliteIdent(c.Name+"_parent") + ` ON ` + t + ` (parent)`,
 	} {
@@ -238,24 +292,23 @@ func (s *sqliteStore) Upsert(ctx context.Context, project string, c Collection, 
 		return err
 	}
 	defer tx.Rollback()
-	q := `INSERT INTO ` + sqliteIdent(c.Name) + ` (id, doc, parent, level, title, text, meta, updated, embedding)
-		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, NULLIF(?, ''), ?, ?, ?, ?)
+	q := `INSERT INTO ` + sqliteIdent(c.Name) + ` (id, doc, parent, level, title, text, meta, updated, embedding, fingerprint)
+		VALUES (?, NULLIF(?, ''), NULLIF(?, ''), ?, NULLIF(?, ''), ?, ?, ?, ?, NULLIF(?, ''))
 		ON CONFLICT (id) DO UPDATE SET doc = excluded.doc, parent = excluded.parent, level = excluded.level,
-		title = excluded.title, text = excluded.text, meta = excluded.meta, updated = excluded.updated, embedding = excluded.embedding`
+		title = excluded.title, text = excluded.text, meta = excluded.meta, updated = excluded.updated, embedding = excluded.embedding,
+		fingerprint = excluded.fingerprint`
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, ch := range chunks {
 		meta, err := metaJSON(ch.Meta)
 		if err != nil {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, q, ch.ID, ch.Doc, ch.Parent, ch.Level, ch.Title, ch.Text, string(meta), now, blob(ch.Vector)); err != nil {
+		if _, err := tx.ExecContext(ctx, q, ch.ID, ch.Doc, ch.Parent, ch.Level, ch.Title, ch.Text, string(meta), now, blob(ch.Vector), ch.Fingerprint); err != nil {
 			return err
 		}
 	}
 	return tx.Commit()
 }
-
-var metaKey = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 func sqliteWhere(f Filter, args []any) (string, []any, error) {
 	var conds []string
@@ -276,17 +329,50 @@ func sqliteWhere(f Filter, args []any) (string, []any, error) {
 	if len(f.Levels) > 0 {
 		in("level", anys(f.Levels))
 	}
-	for k, v := range f.Meta {
+	for _, k := range sortedKeys(f.Meta) {
 		if !metaKey.MatchString(k) {
 			return "", nil, fmt.Errorf("filter.meta: the key %q has characters other than letters, digits, _ and -", k)
 		}
-		args = append(args, v)
-		conds = append(conds, `json_extract(meta, '$."`+k+`"') = ?`)
+		args = append(args, f.Meta[k])
+		conds = append(conds, sqliteMeta(k)+` = ?`)
+	}
+	for _, mc := range f.Conds {
+		switch mc.Op {
+		case "ne":
+			// IS NOT holds for a chunk without the key, whose value is NULL.
+			args = append(args, mc.Value)
+			conds = append(conds, sqliteMeta(mc.Key)+` IS NOT ?`)
+		case "in":
+			vals := mc.Value.([]any)
+			args = append(args, vals...)
+			conds = append(conds, sqliteMeta(mc.Key)+` IN (`+strings.TrimSuffix(strings.Repeat("?, ", len(vals)), ", ")+`)`)
+		default:
+			// SQLite puts any text after any number: only numbers compare.
+			args = append(args, mc.Value)
+			conds = append(conds, `(json_type(meta, '$."`+mc.Key+`"') IN ('integer', 'real') AND `+sqliteMeta(mc.Key)+` `+compareOps[mc.Op]+` ?)`)
+		}
 	}
 	if len(conds) == 0 {
 		return "", args, nil
 	}
 	return " WHERE " + strings.Join(conds, " AND "), args, nil
+}
+
+// sqliteMeta is the value of a key of the meta, checked by metaKey.
+func sqliteMeta(key string) string { return `json_extract(meta, '$."` + key + `"')` }
+
+// sqliteWhereIDs is the WHERE clause of a filter and ids, after the
+// arguments given.
+func sqliteWhereIDs(f Filter, ids []string, args []any) (string, []any, error) {
+	where, args, err := sqliteWhere(f, args)
+	if err != nil {
+		return "", nil, err
+	}
+	if len(ids) > 0 {
+		args = append(args, anys(ids)...)
+		where = andWhere(where, "id IN ("+strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ")+")")
+	}
+	return where, args, nil
 }
 
 func anys[T any](v []T) []any {
@@ -321,7 +407,10 @@ func sqliteChunk(r scanner, extra ...any) (Chunk, error) {
 	return ch, nil
 }
 
-func (s *sqliteStore) Search(ctx context.Context, project string, c Collection, vecs [][]float32, k int, f Filter, withText bool) ([][]Hit, error) {
+// Search compares each vector with every chunk the filter keeps: always
+// exact.
+func (s *sqliteStore) Search(ctx context.Context, project string, c Collection, vecs [][]float32, k int, f Filter, o SearchOptions) ([][]Hit, error) {
+	withText := o.WithText
 	db, err := s.db(ctx, project)
 	if err != nil {
 		return nil, err
@@ -364,17 +453,19 @@ func (s *sqliteStore) Get(ctx context.Context, project string, c Collection, ids
 		return nil, err
 	}
 	marks := strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ")
-	rows, err := db.QueryContext(ctx, `SELECT `+sqliteColumns(true)+` FROM `+sqliteIdent(c.Name)+` WHERE id IN (`+marks+`)`, anys(ids)...)
+	rows, err := db.QueryContext(ctx, `SELECT `+sqliteColumns(true)+`, coalesce(fingerprint, '') FROM `+sqliteIdent(c.Name)+` WHERE id IN (`+marks+`)`, anys(ids)...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	var out []Chunk
 	for rows.Next() {
-		ch, err := sqliteChunk(rows)
+		var fp string
+		ch, err := sqliteChunk(rows, &fp)
 		if err != nil {
 			return nil, err
 		}
+		ch.Fingerprint = fp
 		out = append(out, ch)
 	}
 	return out, rows.Err()
@@ -385,18 +476,9 @@ func (s *sqliteStore) Delete(ctx context.Context, project string, c Collection, 
 	if err != nil {
 		return 0, err
 	}
-	where, args, err := sqliteWhere(f, nil)
+	where, args, err := sqliteWhereIDs(f, ids, nil)
 	if err != nil {
 		return 0, err
-	}
-	if len(ids) > 0 {
-		cond := "id IN (" + strings.TrimSuffix(strings.Repeat("?, ", len(ids)), ", ") + ")"
-		args = append(args, anys(ids)...)
-		if where == "" {
-			where = " WHERE " + cond
-		} else {
-			where += " AND " + cond
-		}
 	}
 	if where == "" {
 		return 0, errors.New("delete needs ids or a filter")
@@ -406,6 +488,151 @@ func (s *sqliteStore) Delete(ctx context.Context, project string, c Collection, 
 		return 0, err
 	}
 	return res.RowsAffected()
+}
+
+// Resume goes on after the last chunk given: pages follow the ids.
+func (s *sqliteStore) Resume(_ string, _ Collection, last, _ Chunk) string { return last.ID }
+
+func (s *sqliteStore) List(ctx context.Context, project string, c Collection, f Filter, after string, limit int, withText, withVectors bool) ([]Chunk, string, error) {
+	db, err := s.db(ctx, project)
+	if err != nil {
+		return nil, "", err
+	}
+	where, args, err := sqliteWhere(f, nil)
+	if err != nil {
+		return nil, "", err
+	}
+	if after != "" {
+		args = append(args, after)
+		where = andWhere(where, "id > ?")
+	}
+	args = append(args, limit+1)
+	cols := sqliteColumns(withText)
+	if withVectors {
+		cols += ", coalesce(fingerprint, ''), embedding"
+	}
+	rows, err := db.QueryContext(ctx, `SELECT `+cols+` FROM `+sqliteIdent(c.Name)+where+` ORDER BY id LIMIT ?`, args...)
+	if err != nil {
+		return nil, "", err
+	}
+	defer rows.Close()
+	var out []Chunk
+	for rows.Next() {
+		var b []byte
+		var fp string
+		var extra []any
+		if withVectors {
+			extra = append(extra, &fp, &b)
+		}
+		ch, err := sqliteChunk(rows, extra...)
+		if err != nil {
+			return nil, "", err
+		}
+		if withVectors {
+			ch.Vector, ch.Fingerprint = unblob(b), fp
+		}
+		out = append(out, ch)
+	}
+	if err := rows.Err(); err != nil || len(out) <= limit {
+		return out, "", err
+	}
+	return out[:limit], out[limit-1].ID, nil
+}
+
+func (s *sqliteStore) Count(ctx context.Context, project string, c Collection, f Filter) (int64, error) {
+	db, err := s.db(ctx, project)
+	if err != nil {
+		return 0, err
+	}
+	where, args, err := sqliteWhere(f, nil)
+	if err != nil {
+		return 0, err
+	}
+	var n int64
+	err = db.QueryRowContext(ctx, `SELECT count(*) FROM `+sqliteIdent(c.Name)+where, args...).Scan(&n)
+	return n, err
+}
+
+// Update checks first that no meta it makes grows over maxMeta, then
+// changes them all in one statement. The two are no transaction: a write
+// after a read in one could fail on another connection's write
+// (SQLITE_BUSY), and the cap only bounds what a caller stores.
+func (s *sqliteStore) Update(ctx context.Context, project string, c Collection, ids []string, f Filter, meta map[string]any, maxMeta int) (int64, error) {
+	db, err := s.db(ctx, project)
+	if err != nil {
+		return 0, err
+	}
+	set, remove := splitUpdate(meta)
+	expr, args := "meta", []any{}
+	if len(set) > 0 {
+		parts := []string{"meta"}
+		for _, k := range sortedKeys(set) {
+			b, err := json.Marshal(set[k])
+			if err != nil {
+				return 0, err
+			}
+			parts = append(parts, `'$."`+k+`"'`, "json(?)")
+			args = append(args, string(b))
+		}
+		expr = "json_set(" + strings.Join(parts, ", ") + ")"
+	}
+	if len(remove) > 0 {
+		paths := make([]string, len(remove))
+		for i, k := range remove {
+			paths[i] = `'$."` + k + `"'`
+		}
+		expr = "json_remove(" + expr + ", " + strings.Join(paths, ", ") + ")"
+	}
+	where, wargs, err := sqliteWhereIDs(f, ids, nil)
+	if err != nil {
+		return 0, err
+	}
+	if where == "" {
+		return 0, errors.New("update needs ids or a filter")
+	}
+	// SQLite's JSON functions write it compact, as the plugin does.
+	check := append(append(append([]any(nil), args...), wargs...), maxMeta)
+	var id string
+	var size int
+	err = db.QueryRowContext(ctx, `SELECT id, n FROM (SELECT id, length(CAST(`+expr+` AS BLOB)) AS n, length(CAST(meta AS BLOB)) AS o
+		FROM `+sqliteIdent(c.Name)+where+`) WHERE n > ? AND n > o LIMIT 1`, check...).Scan(&id, &size)
+	switch {
+	case err == nil:
+		return 0, metaTooLarge(id, size, maxMeta)
+	case !errors.Is(err, sql.ErrNoRows):
+		return 0, err
+	}
+	args = append(append(args, time.Now().UTC().Format(time.RFC3339Nano)), wargs...)
+	res, err := db.ExecContext(ctx, `UPDATE `+sqliteIdent(c.Name)+` SET meta = `+expr+`, updated = ?`+where, args...)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}
+
+func (s *sqliteStore) Refresh(ctx context.Context, project string, c Collection, chunks []Chunk) error {
+	db, err := s.db(ctx, project)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	q := `UPDATE ` + sqliteIdent(c.Name) + ` SET doc = NULLIF(?, ''), parent = NULLIF(?, ''), level = ?,
+		title = NULLIF(?, ''), meta = ?, updated = ? WHERE id = ?`
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, ch := range chunks {
+		meta, err := metaJSON(ch.Meta)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, q, ch.Doc, ch.Parent, ch.Level, ch.Title, string(meta), now, ch.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *sqliteStore) Sample(ctx context.Context, project string, c Collection, limit int) ([]Chunk, int64, error) {
