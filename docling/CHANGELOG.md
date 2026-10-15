@@ -4,6 +4,22 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.3.1] — 2026-10-15
+
+docling 2.132.0, for its security fixes; nothing else changes, and the
+manifest is the same but for the version.
+
+### Security
+- docling 2.130.0 → 2.132.0, which fixes, among others: an SSRF guard
+  that DNS rebinding could get around when it fetches a document's remote
+  resources, and the HTTP headers it sent to every remote image host; a
+  TikZ rendering that could read and write files; a document's JSON that
+  could embed local image files; plugin entry points imported before the
+  check that allows them; table spans and archive members that could
+  exhaust the CPU or the memory.
+- The packages resolve as PyPI stood on 2026-10-01 (they were on
+  2026-09-26), still none younger than two weeks at release.
+
 ## [0.3.0] — 2026-10-12
 
 The first public release. Needs gosidian 2.81 or later for files by

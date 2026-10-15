@@ -62,7 +62,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.3.0")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.3.1")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
