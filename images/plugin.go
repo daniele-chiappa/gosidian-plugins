@@ -32,15 +32,16 @@ type Plugin struct {
 	workers      int
 	maxBytes     int64 // of one image read
 	maxCallBytes int64 // of the files one call gives back
-	client       *http.Client
-	log          *slog.Logger
+	// maxFiles caps the files of one call (IMAGES_MAX_FILES): gosidian
+	// hands at most its [pipelines] max_plugin_files, so the two go up
+	// together.
+	maxFiles int
+	client   *http.Client
+	log      *slog.Logger
 }
 
-// maxCallFiles caps the files of one call, as gosidian does.
-const maxCallFiles = 100
-
 const convertSchema = `{"type": "object", "required": ["files"], "properties": {
-  "files": {"description": "The images: one file, or a list of up to 100 (vault paths, or entries with a path, as in.list gives them)",
+  "files": {"description": "The images: one file, or a list of up to IMAGES_MAX_FILES, 100 by default (vault paths, or entries with a path, as in.list gives them)",
     "oneOf": [{"type": "string"}, {"type": "array", "items": {}}]},
   "format": {"type": "string", "enum": ["png", "webp", "keep"], "default": "png",
     "description": "png: PNG optimized without loss; webp: WebP without loss (an image of 16 bits a sample comes back a PNG, which keeps them); keep: the same format, optimized when it can be (TIFF becomes PNG)"},
@@ -88,8 +89,8 @@ type fileRef struct {
 	URL    string `json:"url"`
 }
 
-// refs reads the files argument: one reference or a list.
-func refs(v any) ([]fileRef, error) {
+// refs reads the files argument: one reference or a list of up to max.
+func refs(v any, max int) ([]fileRef, error) {
 	raw, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
@@ -102,8 +103,8 @@ func refs(v any) ([]fileRef, error) {
 		}
 		list = []fileRef{one}
 	}
-	if len(list) == 0 || len(list) > maxCallFiles {
-		return nil, fmt.Errorf("files: from 1 to %d, not %d", maxCallFiles, len(list))
+	if len(list) == 0 || len(list) > max {
+		return nil, fmt.Errorf("files: from 1 to %d (IMAGES_MAX_FILES), not %d", max, len(list))
 	}
 	for i, r := range list {
 		if r.URL == "" || r.Name == "" {
@@ -158,7 +159,7 @@ type item struct {
 
 func (p *Plugin) handleConvert(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
-	list, err := refs(args["files"])
+	list, err := refs(args["files"], p.maxFiles)
 	if err != nil {
 		return mcp.NewToolResultError(err.Error()), nil
 	}

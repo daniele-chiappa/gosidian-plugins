@@ -4,6 +4,14 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.4.0] — 2026-10-15
+
+### Added
+- `limits.max_graph` and `limits.max_graph_k` in the preset: the chunks or
+  documents of a graph (5000) and the neighbours of each (20), which were
+  constants. gosidian draws up to its `[web] graph_max_nodes`: raise the
+  two together. The README says which lengths are formats and stay.
+
 ## [0.3.0] — 2026-10-15
 
 Versions of the chunks, kept in their meta: the operators to find the

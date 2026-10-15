@@ -97,7 +97,8 @@ func TestConfig(t *testing.T) {
 	}
 	c := good()
 	if err := c.check(); err != nil || c.DefaultModel != "m" || c.Models[0].Size() != 512 || c.Limits.MaxItems != 500 ||
-		c.Limits.MaxQueries != 32 || c.Limits.MaxResult != 1000<<10 || c.Limits.MaxIn != 1000 || c.Limits.MaxMeta != 16<<10 || c.Limits.MaxUpdateKeys != 64 {
+		c.Limits.MaxQueries != 32 || c.Limits.MaxResult != 1000<<10 || c.Limits.MaxIn != 1000 || c.Limits.MaxMeta != 16<<10 || c.Limits.MaxUpdateKeys != 64 ||
+		c.Limits.MaxGraph != 5000 || c.Limits.MaxGraphK != 20 {
 		t.Fatalf("%+v %v", c, err)
 	}
 	for why, change := range map[string]func(*Config){

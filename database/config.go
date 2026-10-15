@@ -150,6 +150,11 @@ type Limits struct {
 	MaxMeta int `yaml:"max_meta"`
 	// MaxUpdateKeys are the keys one update sets or removes.
 	MaxUpdateKeys int `yaml:"max_update_keys"`
+	// MaxGraph caps the chunks or documents of a graph, MaxGraphK the
+	// neighbours of each: gosidian draws up to its [web] graph_max_nodes,
+	// so the two go up together.
+	MaxGraph  int `yaml:"max_graph"`
+	MaxGraphK int `yaml:"max_graph_k"`
 }
 
 // Duration is a time.Duration written as "30s".
@@ -290,6 +295,12 @@ func (c *Config) check() error {
 	}
 	if c.Limits.MaxUpdateKeys <= 0 {
 		c.Limits.MaxUpdateKeys = 64
+	}
+	if c.Limits.MaxGraph <= 0 {
+		c.Limits.MaxGraph = 5000
+	}
+	if c.Limits.MaxGraphK <= 0 {
+		c.Limits.MaxGraphK = 20
 	}
 	switch {
 	case c.Limits.MaxResult == 0:

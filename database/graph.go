@@ -25,19 +25,19 @@ import (
 
 const (
 	graphTool = "gosidian_graph"
-	// sampleMax caps the chunks of a graph: gosidian draws up to 5000 nodes.
-	sampleMax     = 5000
+	// sampleDefault is the chunks of a graph that asks for no sample, at
+	// most limits.max_graph; the neighbours of each at most
+	// limits.max_graph_k.
 	sampleDefault = 2000
-	kMax          = 20
-	// nodeText caps the text a node carries.
+	// nodeText caps the text a node carries, a format of the view.
 	nodeText = 400
 )
 
 var graphSchemas = map[string]map[string]any{
 	"chunks": object([]string{"collection"}, map[string]any{
 		"collection": prop("string", "The collection"),
-		"k":          prop("integer", "Neighbours of each chunk (default 6, at most 20)"),
-		"sample":     prop("integer", "Chunks drawn at most (default 2000, at most 5000), in proportion to the documents"),
+		"k":          prop("integer", "Neighbours of each chunk (default 6, at most limits.max_graph_k, 20)"),
+		"sample":     prop("integer", "Chunks drawn at most (default 2000, at most limits.max_graph, 5000; gosidian draws up to its graph_max_nodes), in proportion to the documents"),
 		"color":      prop("string", "What groups the chunks: doc (default), level, parent, or meta.<key>"),
 		"layout":     map[string]any{"type": "string", "enum": []string{"force", "pca"}, "description": "force (default): the neighbours place them; pca: the first components fix their places"},
 	}),
@@ -127,15 +127,16 @@ func (p *Plugin) graph(ctx context.Context, project, name string, with map[strin
 		return nil, fmt.Errorf("layout %q: force or pca", layout)
 	}
 	color, _ := with["color"].(string)
-	limit := sampleMax
+	lim := p.cfg.Limits
+	limit := lim.MaxGraph
 	k := 4
 	if name == "chunks" {
-		if limit, err = intArg(with, "sample", sampleDefault, 1, sampleMax); err != nil {
+		if limit, err = intArg(with, "sample", min(sampleDefault, lim.MaxGraph), 1, lim.MaxGraph); err != nil {
 			return nil, err
 		}
 		k = 6
 	}
-	if k, err = intArg(with, "k", k, 1, kMax); err != nil {
+	if k, err = intArg(with, "k", min(k, lim.MaxGraphK), 1, lim.MaxGraphK); err != nil {
 		return nil, err
 	}
 	chunks, total, err := p.store.Sample(ctx, project, c, limit)

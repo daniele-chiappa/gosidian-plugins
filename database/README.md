@@ -188,7 +188,7 @@ store:
   url: postgres://gosidian@postgres:5432/vectors
   # meta_index: {status: keyword, since: integer}   # Qdrant: the meta keys its filters use
 limits: {max_items: 500, max_list: 5000, max_text: 32768, max_k: 100, max_queries: 32, max_result: 1024000,
-         max_in: 1000, max_meta: 16384, max_update_keys: 64}
+         max_in: 1000, max_meta: 16384, max_update_keys: 64, max_graph: 5000, max_graph_k: 20}
 ```
 
 **The limits** are the installer's to set. `max_items` chunks per write
@@ -199,7 +199,11 @@ by default): raise the two together for larger steps. `max_in` values of
 an `in` of a [filter](#filters); `max_meta` bytes of a chunk's meta as
 JSON, an upsert's and what an `update` makes of it (PostgreSQL measures
 an update's as it writes jsonb, a space after each `:` and `,`);
-`max_update_keys` keys one `update` sets or removes.
+`max_update_keys` keys one `update` sets or removes. `max_graph` chunks or
+documents of a [graph](#graphs), `max_graph_k` neighbours of each: gosidian
+draws up to its `[web] graph_max_nodes` (5000 by default), so raise the two
+together. The lengths of an id (256), a doc and a title (1024), a parent
+(256) and a cursor (256) are formats, not limits, and stay as they are.
 
 **Prefixes matter.** No endpoint adds them. On a bench of Italian
 documents (2026-10-12), EmbeddingGemma without its prefix lost 5 points
@@ -325,7 +329,7 @@ CREATE ROLE "q_rag" LOGIN PASSWORD '…';
 ```yaml
 services:
   vec-pg:
-    image: ghcr.io/daniele-chiappa/gosidian-database:0.3.0
+    image: ghcr.io/daniele-chiappa/gosidian-database:0.4.0
     environment:
       DB_NAME: vec-pg                 # the name gosidian registers it with
       GOSIDIAN_PLUGIN_TOKEN: ${VEC_PG_TOKEN}

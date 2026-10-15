@@ -81,6 +81,10 @@ func config(log *slog.Logger) (*Plugin, error) {
 	if err != nil {
 		return nil, err
 	}
+	maxFiles, err := envInt("IMAGES_MAX_FILES", 100)
+	if err != nil {
+		return nil, err
+	}
 	level, err := envInt("IMAGES_PNG_LEVEL", defaultPNGLevel)
 	if err != nil || level > 6 {
 		return nil, fmt.Errorf("IMAGES_PNG_LEVEL: from 1 to 6 (oxipng -o)")
@@ -101,7 +105,7 @@ func config(log *slog.Logger) (*Plugin, error) {
 	return &Plugin{
 		conv:    &Converter{PNGLevel: level, WebPZ: z, MaxPixels: int64(maxPixels), Timeout: time.Duration(secs) * time.Second},
 		token:   os.Getenv("GOSIDIAN_PLUGIN_TOKEN"),
-		workers: workers, maxBytes: int64(maxMiB) << 20, maxCallBytes: int64(callMiB) << 20,
+		workers: workers, maxBytes: int64(maxMiB) << 20, maxCallBytes: int64(callMiB) << 20, maxFiles: maxFiles,
 		client: &http.Client{Timeout: 5 * time.Minute},
 		log:    log,
 	}, nil

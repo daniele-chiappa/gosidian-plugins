@@ -100,6 +100,15 @@ func TestGraph(t *testing.T) {
 			if err != nil || len(g.Nodes) != 2 || len(g.Edges) != 1 || g.Nodes[0].ID != "doc:guide/basilico.md" || g.Nodes[0].Group != "guide" || !strings.Contains(g.Nodes[0].Text, "2 chunks") {
 				t.Errorf("docs: %+v %v", g, err)
 			}
+			// limits.max_graph caps the sample, asked or not.
+			p.cfg.Limits.MaxGraph = 3
+			if g, err := p.graph(ctx, proj, "chunks", map[string]any{"collection": "procedure"}); err != nil || len(g.Nodes) != 3 || !g.Stats.Truncated {
+				t.Errorf("under max_graph 3: %+v %v", g, err)
+			}
+			if _, err := p.graph(ctx, proj, "chunks", map[string]any{"collection": "procedure", "sample": float64(4)}); err == nil {
+				t.Error("a sample over max_graph accepted")
+			}
+			p.cfg.Limits.MaxGraph = 5000
 			for args, why := range map[string]map[string]any{
 				"k":       {"collection": "procedure", "k": float64(50)},
 				"layout":  {"collection": "procedure", "layout": "umap"},

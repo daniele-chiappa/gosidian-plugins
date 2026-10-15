@@ -4,6 +4,13 @@ The changes of the `images` plugin, newest first. A tag
 `images/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-images:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.0] — 2026-10-15
+
+### Added
+- `IMAGES_MAX_FILES` (100): the files one call names, which was a
+  constant. gosidian hands at most its `[pipelines] max_plugin_files`:
+  raise the two together.
+
 ## [0.1.0] — 2026-10-15
 
 The first release. Needs gosidian 2.89 or later: its tool takes files of

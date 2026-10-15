@@ -17,7 +17,7 @@ import (
 )
 
 func testPlugin() *Plugin {
-	return &Plugin{conv: testConverter(), workers: 2, maxBytes: 8 << 20, maxCallBytes: 64 << 20, client: http.DefaultClient,
+	return &Plugin{conv: testConverter(), workers: 2, maxBytes: 8 << 20, maxCallBytes: 64 << 20, maxFiles: 100, client: http.DefaultClient,
 		log: slog.New(slog.NewTextHandler(io.Discard, nil)), token: "secret"}
 }
 
@@ -216,5 +216,19 @@ func TestManifestAndHandler(t *testing.T) {
 	resp, err = http.Get(srv.URL + "/health")
 	if err != nil || resp.StatusCode != http.StatusOK {
 		t.Errorf("/health: %v", err)
+	}
+}
+
+// IMAGES_MAX_FILES caps the files one call names.
+func TestHandleConvert_MaxFiles(t *testing.T) {
+	p := testPlugin()
+	p.maxFiles = 1
+	refs := files(t, map[string][]byte{"a.png": {1}, "b.png": {2}})
+	res, err := p.handleConvert(context.Background(), convertReq(map[string]any{"files": refs}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.IsError || !strings.Contains(textOf(res), "IMAGES_MAX_FILES") {
+		t.Errorf("two files under a cap of one: %s", textOf(res))
 	}
 }

@@ -68,7 +68,7 @@ original: see gosidian's `docs/pipelines.md`.
 ```yaml
 services:
   gosidian-images:
-    image: ghcr.io/daniele-chiappa/gosidian-images:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-images:0.2.0
     read_only: true
     tmpfs: [/tmp]
     environment:
@@ -91,7 +91,8 @@ other services. On a small host lower `IMAGES_MAX_PIXELS` or
 | `IMAGES_WORKERS` | the CPUs, at most 8 | images converted at once |
 | `IMAGES_MAX_MIB` | 64 | the largest file it reads, in MiB |
 | `IMAGES_MAX_PIXELS` | 100000000 | the largest image it decodes, width × height (100 megapixels): a larger one fails before any program reads its pixels |
-| `IMAGES_MAX_CALL_MIB` | 64 | the files one call gives back, together, in MiB: they stay in memory, and twice more in the answer, until it is written. Those past it fail. gosidian stores at most 100 MiB of the files of one answer |
+| `IMAGES_MAX_CALL_MIB` | 64 | the files one call gives back, together, in MiB: they stay in memory, and twice more in the answer, until it is written. Those past it fail. gosidian stores at most its `[pipelines] max_plugin_files_bytes` (100 MiB by default) of the files of one answer |
+| `IMAGES_MAX_FILES` | 100 | the files one call names; gosidian hands at most its `[pipelines] max_plugin_files` (100 by default): raise the two together |
 | `IMAGES_PNG_LEVEL` | 2 | oxipng's `-o`, 1 to 6: on 300 screenshots, 2 made 66.9% of the weight in 19 s, 4 made 65.7% in 96 s |
 | `IMAGES_WEBP_Z` | 6 | cwebp's `-z`, 1 to 9: 9 saved 2% more than 6 in thirteen times the time |
 | `IMAGES_TIMEOUT` | 120 | seconds for one image |
