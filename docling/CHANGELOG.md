@@ -4,6 +4,38 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.4.0] — 2026-10-17
+
+Presentations slide by slide, with their titles and speaker notes, which
+the way through PDF lost. The other formats come out as with 0.3.1, byte
+for byte. The manifest changes (four settings), and the owner accepts it
+again.
+
+### Added
+- **`slides`** (on by default): a presentation (pptx, and ppt and odp,
+  which LibreOffice turns into pptx) is read by docling's pptx reader and
+  written a section per slide, `## Slide N — title`. The title is the
+  slide's title placeholder or, without one, its first line, top to bottom
+  and left to right; a first line longer than 150 characters stays in the
+  slide. `slides: false` sends a presentation the way `office` says, as
+  before.
+- **`notes`** (on by default): a slide's speaker notes under it, a quote
+  that starts with `**Notes**:`. Through PDF they were lost.
+- **`slide_label`** and **`notes_label`**: the words of the heading and of
+  the notes, `Slide` and `Notes` by default (`Diapositiva` and `Note del
+  relatore` for a deck in Italian).
+- A line or a picture on more than half of the slides (a footer drawn as
+  a text box, a logo pasted on each) is left out, and so are the footer,
+  date and slide number placeholders. docling reads neither the layouts nor
+  the masters, so their pictures do not come out either.
+- The tests of the slides (`scripts/test.sh`, in the check of every PR):
+  decks made with python-pptx, read with docling-slim's pptx reader.
+
+### Changed
+- A presentation no longer goes through LibreOffice to PDF by default:
+  `office` concerns it only with `slides: false`. Its `title` is its first
+  slide's.
+
 ## [0.3.1] — 2026-10-15
 
 docling 2.132.0, for its security fixes; nothing else changes, and the

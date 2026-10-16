@@ -21,18 +21,53 @@ base64, which works as before, up to `DOCLING_MAX_BYTES`.
 | `max_pages` | 200 | convert the first pages only |
 | `images_scale` | 2 | the pictures' scale (1 = 72 dpi) |
 | `pdf_backend` | `pypdfium` | how a PDF's text is read: `pypdfium` (pypdfium2) or `docling` (docling-parse) |
-| `office` | `pdf` | documents and presentations: through LibreOffice to PDF (`pdf`), or read as docx and pptx (`native`) |
+| `office` | `pdf` | documents (and presentations with `slides: false`): through LibreOffice to PDF (`pdf`), or read as docx and pptx (`native`) |
+| `slides` | `true` | presentations (pptx, ppt, odp) slide by slide, with their speaker notes; `false`: as `office` says |
+| `notes` | `true` | with `slides`: a slide's speaker notes under it |
+| `slide_label` | `Slide` | with `slides`: the word before a slide's number in its heading |
+| `notes_label` | `Notes` | with `slides`: the word before a slide's speaker notes |
 
-**Office documents** (since 0.3.0): documents and presentations (doc,
-docx, odt, rtf, ppt, pptx, odp) go through LibreOffice to PDF, which
-docling then reads; about a second for a page. Docling's Word reader takes
-apart a figure made of a picture, arrows and labelled boxes (the labels
-come out as lines of their own, the picture in pieces), and loses the text
-of the boxes; the PDF keeps the figure whole, as the page shows it, and its
-text is the document's own, not what a PDF printer drew. Spreadsheets
-(xls, ods, xlsx) go to xlsx, which docling reads as tables.
-`office: native` reads docx and pptx as they are and turns the older
-formats into them.
+**Office documents** (since 0.3.0): documents (doc, docx, odt, rtf) go
+through LibreOffice to PDF, which docling then reads; about a second for a
+page. Presentations go slide by slide since 0.4.0 (below), and to PDF too
+with `slides: false`. Docling's Word reader takes apart a figure made of a
+picture, arrows and labelled boxes (the labels come out as lines of their
+own, the picture in pieces), and loses the text of the boxes; the PDF keeps
+the figure whole, as the page shows it, and its text is the document's own,
+not what a PDF printer drew. Spreadsheets (xls, ods, xlsx) go to xlsx,
+which docling reads as tables. `office: native` reads docx (and pptx, with
+`slides: false`) as they are and turns the older formats into them.
+
+**Presentations** (since 0.4.0): pptx, and ppt and odp turned into pptx by
+LibreOffice, are read by docling's pptx reader and written slide by slide,
+a section for each:
+
+```markdown
+## Slide 2 — Compost results
+
+Three bins were turned weekly.
+
+> **Notes**: Show the photos of the bins.
+```
+
+A slide's title is its title placeholder or, without one, its first line
+(top to bottom, left to right), which then leaves the slide's text; a first
+line longer than 150 characters stays in the text, and the heading has the
+number alone. The speaker notes follow, a quote whose paragraphs are the
+notes' (`notes: false` leaves them out). `slide_label` and `notes_label`
+are the words of the heading and of the notes, `Diapositiva` and `Note del
+relatore` for a deck in Italian; empty, the heading is the number and the
+title, and the notes have no word before them. A line, or a picture, on
+more than half of the slides (of three or more) is a footer or a logo and
+is left out, with the footer, date and slide number placeholders; docling
+reads neither the layouts nor the masters, so their pictures do not come
+out. The slide's own pictures, tables and charts (their data, as a table)
+come as in a document; `pages` counts the slides, and a picture's `page` is
+its slide. Through PDF the notes were lost, the slides ran on without a
+break, and a title not in a title placeholder was not one; a slide whose
+figure is drawn with shapes and arrows keeps it whole only through PDF
+(`slides: false`). With no models to run, a deck of ten slides takes under
+a second where the PDF took two minutes.
 
 **PDF text** (since 0.3.0): read with pypdfium2 by default. docling-parse
 reads every letter twice in a PDF that draws its bold as two strokes
@@ -41,16 +76,17 @@ procedures it gave 33 such lines, pypdfium2 one, with the same tables and
 headings. `pdf_backend: docling` brings docling-parse back for a document.
 
 Output: `markdown` (a picture is `![caption](fig-N.png)`; in a table's
-cell, on its line), `title`,
-`pages`, `tables`, `pictures` (`name`, `page`, `caption`), and from
-gosidian `files` (`name`, `path`, `mime`, `markdown`).
+cell, on its line), `title` (of a presentation, its first slide's),
+`pages` (of a presentation, its slides), `tables`, `pictures` (`name`,
+`page`, `caption`), and from gosidian `files` (`name`, `path`, `mime`,
+`markdown`).
 
 ## Running it
 
 ```yaml
 services:
   gosidian-docling:
-    image: ghcr.io/daniele-chiappa/gosidian-docling:0.3.1
+    image: ghcr.io/daniele-chiappa/gosidian-docling:0.4.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${DOCLING_TOKEN:?}
@@ -77,19 +113,31 @@ of a compose file, set gosidian's `[pipelines] files_url` (or
 `http://gosidian:8080`: the files then go straight from one container to
 the other, not through a proxy in front of gosidian.
 
-Versions 0.2.0 (`file_refs`, `network`) and 0.3.0 (`pdf_backend`,
-`office`, the office kinds) change the manifest: the owner accepts it again, `gosidian
+Versions 0.2.0 (`file_refs`, `network`), 0.3.0 (`pdf_backend`,
+`office`, the office kinds) and 0.4.0 (`slides`, `notes`, `slide_label`,
+`notes_label`) change the manifest: the owner accepts it again, `gosidian
 plugin show docling` then `gosidian plugin accept docling <sha>`. The
 image of 0.3.0 is about 600 MB larger, for LibreOffice.
 
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.3.1 -t gosidian-docling:0.3.1 docling/
+docker build --build-arg VERSION=0.4.0 -t gosidian-docling:0.4.0 docling/
 ```
 
 The image is built for amd64 only (about 5 GB: torch on the CPU, the
 models and LibreOffice).
+
+## Tests
+
+```bash
+sh docling/scripts/test.sh
+```
+
+They make decks with python-pptx and read them slide by slide, in
+`python:3.12-slim` with docling's pptx reader (`docling-slim`) at the
+image's versions, not the image: titles, notes, footers, logos, a chart and
+the labels.
 
 ## Licenses
 

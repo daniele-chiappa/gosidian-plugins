@@ -11,13 +11,16 @@ two tools over Streamable HTTP at /mcp:
   url}, which it fetches from gosidian while the step runs; a file sent
   the old way ({name, mime, data} in base64) still works.
 
-Documents and presentations (doc, docx, odt, rtf, ppt, pptx, odp) go
-through LibreOffice to PDF first, then docling reads the PDF: a figure
-made of a picture, arrows and labelled boxes stays whole, as the page
-shows it, where docling's Word reader takes it apart, and the text is the
-document's own. Spreadsheets go to xlsx, which docling reads as tables.
-office: native reads docx, pptx and xlsx as they are, and turns the older
-formats into them. A PDF is read with pypdfium2 by default: docling-parse
+Documents (doc, docx, odt, rtf) go through LibreOffice to PDF first,
+then docling reads the PDF: a figure made of a picture, arrows and
+labelled boxes stays whole, as the page shows it, where docling's Word
+reader takes it apart, and the text is the document's own. Spreadsheets go
+to xlsx, which docling reads as tables. office: native reads docx and
+xlsx as they are, and turns the older formats into them. Presentations
+(pptx, and ppt and odp turned into pptx) are read by docling's pptx
+reader and written slide by slide: a section per slide, titled, with its
+speaker notes, which a PDF loses; slides: false sends them the way office
+says, as before. A PDF is read with pypdfium2 by default: docling-parse
 reads twice the letters of a PDF that draws its bold as two strokes
 (pdf_backend chooses).
 
@@ -38,9 +41,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import collections
 import contextlib
 import hashlib
 import hmac
+import html
 import io
 import logging
 import os
@@ -62,7 +67,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.3.1")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.4.0")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
@@ -101,9 +106,16 @@ OFFICE = {
 if SOFFICE:
     KINDS.update({ext: mime for ext, (_, mime) in OFFICE.items()})
 
-# The kinds that go to PDF with office: pdf, docx and pptx among them.
+# The kinds that go to PDF with office: pdf, docx and pptx among them
+# (the presentations with slides: false).
 VIA_PDF = {"doc", "docx", "odt", "rtf", "ppt", "pptx", "odp"}
 OFFICE_MODES = ("pdf", "native")
+
+# The presentations, read slide by slide as pptx (slides, by default).
+SLIDES = {"pptx", "ppt", "odp"}
+# A slide's first line is its title when it has no title placeholder,
+# unless it is longer than this: then the line stays in the slide.
+SLIDE_TITLE_MAX = 150
 
 # How a PDF's text is read: pypdfium2, or docling-parse.
 PDF_BACKENDS = ("pypdfium", "docling")
@@ -122,7 +134,12 @@ CONVERT_SETTINGS = {
         "pdf_backend": {"type": "string", "enum": list(PDF_BACKENDS), "default": "pypdfium",
                         "description": "How a PDF's text is read: pypdfium (pypdfium2), or docling (docling-parse)."},
         "office": {"type": "string", "enum": list(OFFICE_MODES), "default": "pdf",
-                   "description": "Documents and presentations: through LibreOffice to PDF (pdf), or read as docx and pptx (native)."},
+                   "description": "Documents (and presentations with slides off): through LibreOffice to PDF (pdf), or read as docx and pptx (native)."},
+        "slides": {"type": "boolean", "default": True,
+                   "description": "Presentations (pptx, ppt, odp) slide by slide: a section per slide, titled by its title or its first line, with its speaker notes; footers and pictures on more than half the slides left out. Off: as office says."},
+        "notes": {"type": "boolean", "default": True, "description": "With slides: a slide's speaker notes under it."},
+        "slide_label": {"type": "string", "default": "Slide", "description": "With slides: the word before a slide's number in its heading."},
+        "notes_label": {"type": "string", "default": "Notes", "description": "With slides: the word before a slide's speaker notes."},
     },
 }
 
@@ -152,7 +169,7 @@ MANIFEST = {
         {
             "name": "convert",
             "tool": "convert",
-            "description": "A document to markdown; its pictures come back as files (output files), named fig-N.png in the markdown.",
+            "description": "A document to markdown, a presentation slide by slide with its speaker notes; its pictures come back as files (output files), named fig-N.png in the markdown.",
             "files": ["file"],
             "file_refs": True,
             "input_schema": CONVERT_SETTINGS,
@@ -187,6 +204,10 @@ CONVERT_TOOL_INPUT = {
         "images_scale": {"type": "number", "minimum": 0.5, "maximum": 4},
         "pdf_backend": {"type": "string", "enum": list(PDF_BACKENDS)},
         "office": {"type": "string", "enum": list(OFFICE_MODES)},
+        "slides": {"type": "boolean"},
+        "notes": {"type": "boolean"},
+        "slide_label": {"type": "string", "maxLength": 40},
+        "notes_label": {"type": "string", "maxLength": 40},
     },
 }
 
@@ -251,11 +272,105 @@ def office_convert(path: pathlib.Path, into: str, target: str) -> pathlib.Path:
     return got
 
 
-def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, max_pages: int, scale: float, backend: str = "pypdfium") -> tuple[dict, list[tuple[str, bytes]]]:
-    """Converts one document, its bytes or a file named as it: the structured result and the picture files."""
+def one_line(text: str) -> str:
+    return " ".join((text or "").split())
+
+
+def md_text(text: str) -> str:
+    """A slide's title or a line of its notes in markdown, escaped as docling
+    escapes the text it writes."""
+    return html.escape(re.sub(r"(?<!\\)_", r"\_", one_line(text)), quote=False)
+
+
+def slide_placeholders(source) -> dict[int, set[str]]:
+    """The lines of each slide's footer, date and number placeholders, by
+    slide: docling's pptx reader gives them as lines of the slide."""
+    from pptx import Presentation
+    from pptx.enum.shapes import PP_PLACEHOLDER
+
+    kinds = {PP_PLACEHOLDER.FOOTER, PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.SLIDE_NUMBER}
+    found: dict[int, set[str]] = {}
+    try:
+        deck = Presentation(io.BytesIO(source) if isinstance(source, bytes) else str(source))
+        for n, slide in enumerate(deck.slides, 1):
+            for shape in slide.placeholders:
+                if shape.placeholder_format.type in kinds and shape.has_text_frame:
+                    found.setdefault(n, set()).update(one_line(p.text) for p in shape.text_frame.paragraphs)
+    except Exception as e:  # docling read it: the slides come out, with these lines
+        log.warning("the placeholders of the slides could not be read: %s", e)
+    return found
+
+
+def slides_markdown(doc, source, notes: bool, slide_label: str, notes_label: str) -> tuple[str, str]:
+    """A presentation read by docling's pptx reader, as markdown, a section
+    per slide: its heading, with the slide's title (its title placeholder,
+    or else its first line), what the slide holds, and its speaker notes.
+    The footer, date and number placeholders, and the lines and pictures on
+    more than half the slides (a footer drawn as a text box, a logo), go to
+    the furniture, which the markdown leaves out; docling reads neither the
+    layouts nor the masters, nor their pictures. Gives the markdown, its
+    pictures as PLACEHOLDER, and the first title."""
+    from docling_core.types.doc import ContentLayer, DocItemLabel, ImageRefMode, PictureItem, TextItem
+
+    def repeated(item):
+        """What a footer or a logo repeats from slide to slide: its line, or its picture."""
+        if isinstance(item, TextItem) and item.label not in (DocItemLabel.TITLE, DocItemLabel.CAPTION):
+            return ("line", one_line(item.text)) if one_line(item.text) else None
+        if isinstance(item, PictureItem) and item.image is not None:
+            return ("picture", hashlib.sha256(str(item.image.uri).encode()).hexdigest())
+        return None
+
+    numbers = sorted(doc.pages)
+    on = {n: [] for n in numbers}
+    for item, _level in doc.iterate_items():
+        if item.prov and item.prov[0].page_no in on:
+            on[item.prov[0].page_no].append(item)
+    seen = collections.Counter(k for n in numbers for k in {repeated(i) for i in on[n]} if k)
+    common = {k for k, c in seen.items() if c * 2 > len(numbers)} if len(numbers) >= 3 else set()
+    placeholders = slide_placeholders(source)
+
+    titles = {}
+    for n in numbers:
+        for item in on[n]:
+            if repeated(item) in common or (isinstance(item, TextItem) and one_line(item.text) in placeholders.get(n, ())):
+                item.content_layer = ContentLayer.FURNITURE
+        lines = [i for i in on[n] if isinstance(i, TextItem) and i.label != DocItemLabel.CAPTION and i.content_layer == ContentLayer.BODY and one_line(i.text)]
+        head = [i for i in lines if i.label == DocItemLabel.TITLE]
+        if not head and lines and len(one_line(lines[0].text)) <= SLIDE_TITLE_MAX:
+            head = lines[:1]
+        for i in head:
+            i.content_layer = ContentLayer.FURNITURE  # it is the heading
+        titles[n] = " ".join(one_line(i.text) for i in head)
+
+    said = collections.defaultdict(list)
+    if notes:
+        for item, _level in doc.iterate_items(included_content_layers={ContentLayer.NOTES}):
+            if isinstance(item, TextItem) and item.label == DocItemLabel.TEXT and item.prov:
+                said[item.prov[0].page_no].extend(item.text.replace("\v", "\n").split("\n"))
+
+    out = []
+    for n in numbers:
+        heading = " ".join(x for x in (slide_label.strip(), str(n)) if x)
+        out.append(f"## {heading} — {md_text(titles[n])}" if titles[n] else f"## {heading}")
+        body = doc.export_to_markdown(page_no=n, image_mode=ImageRefMode.PLACEHOLDER, image_placeholder=PLACEHOLDER).strip()
+        if body:
+            out.append(body)
+        lines = [md_text(x) for x in said[n] if x.strip()]
+        if lines:
+            if notes_label.strip():
+                lines[0] = f"**{md_text(notes_label)}**: {lines[0]}"
+            out.append("\n>\n".join("> " + x for x in lines))
+    return "\n\n".join(out), next((t for t in titles.values() if t), "")
+
+
+def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, max_pages: int, scale: float, backend: str = "pypdfium", slides: dict | None = None) -> tuple[dict, list[tuple[str, bytes]]]:
+    """Converts one document, its bytes or a file named as it: the structured
+    result and the picture files. slides, for a pptx, holds slides_markdown's
+    notes, slide_label and notes_label."""
     from docling.datamodel.base_models import DocumentStream
     from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 
+    raw = source
     if isinstance(source, bytes):
         source = DocumentStream(name=name, stream=io.BytesIO(source))
     result = converter(ocr, scale, backend).convert(source, max_num_pages=max_pages, max_file_size=size_cap, raises_on_error=False)
@@ -264,7 +379,11 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         errors = "; ".join(str(e.error_message) for e in (result.errors or [])) or result.status.name
         raise ConvertError(f"docling could not convert {name}: {errors}")
 
-    md = doc.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER, image_placeholder=PLACEHOLDER)
+    title = None
+    if slides is not None:
+        md, title = slides_markdown(doc, raw, **slides)
+    else:
+        md = doc.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER, image_placeholder=PLACEHOLDER)
     files: list[tuple[str, bytes]] = []
     shown: list[dict] = []
     tables = 0
@@ -301,12 +420,12 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         out.append(parts[n])
     out.extend(parts[n + 1 :])
 
-    title = None
-    for item, _level in doc.iterate_items():
-        label = getattr(item, "label", None)
-        if label is not None and str(getattr(label, "value", label)) in ("title", "section_header"):
-            title = getattr(item, "text", None)
-            break
+    if title is None:
+        for item, _level in doc.iterate_items():
+            label = getattr(item, "label", None)
+            if label is not None and str(getattr(label, "value", label)) in ("title", "section_header"):
+                title = getattr(item, "text", None)
+                break
     return {
         "markdown": re.sub(r"\n{3,}", "\n\n", "".join(out)).strip() + "\n",
         "title": title or "",
@@ -417,8 +536,15 @@ async def call_tool(name: str, arguments: dict):
             office = str(arguments.get("office") or "pdf")
             if office not in OFFICE_MODES:
                 raise ConvertError(f"office {office!r}: {' or '.join(OFFICE_MODES)}")
+            # A presentation goes slide by slide, as pptx: a PDF loses its notes.
+            slides = None
+            if ext in SLIDES and arguments.get("slides") is not False:
+                slides = {"notes": arguments.get("notes") is not False}
+                for key, default in (("slide_label", "Slide"), ("notes_label", "Notes")):
+                    got = arguments.get(key)
+                    slides[key] = got[:40] if isinstance(got, str) else default
             target = None
-            if office == "pdf" and ext in VIA_PDF and SOFFICE:
+            if office == "pdf" and ext in VIA_PDF and SOFFICE and slides is None:
                 target = "pdf"
             elif ext in OFFICE:
                 target = OFFICE[ext][0]
@@ -430,7 +556,7 @@ async def call_tool(name: str, arguments: dict):
                     path.write_bytes(source)
                     source = path
                 source = await anyio.to_thread.run_sync(office_convert, pathlib.Path(source), tmp, target)
-            result, files = await anyio.to_thread.run_sync(convert_sync, fname, source, cap, ocr, pictures, max_pages, scale, backend)
+            result, files = await anyio.to_thread.run_sync(convert_sync, fname, source, cap, ocr, pictures, max_pages, scale, backend, slides)
     except ConvertError as e:
         return types.CallToolResult(content=[types.TextContent(type="text", text=str(e))], isError=True)
     finally:

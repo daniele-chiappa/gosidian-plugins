@@ -91,7 +91,7 @@ func testSettings(t *testing.T) Settings {
 	}
 	return Settings{Name: "chat", PublicURL: "https://chat.example.com", Token: "tok", Wait: 5 * time.Second, SessionTTL: time.Hour,
 		MaxSessions: 100, MaxHistory: 2, PerMinute: 10, PerSession: 100, MaxMessage: 200, IPPerMinute: 100, WidgetDir: dir,
-		ImageMaxBytes: 1 << 20, ImagesMaxBytes: 4 << 20, ImagesTTL: time.Hour}
+		ImageMaxBytes: 1 << 20, ImagesMaxBytes: 4 << 20, ImagesTTL: time.Hour, ImagesPerCall: 4}
 }
 
 func configureArgs(g *fakeGosidian, extra map[string]any) map[string]any {
@@ -291,10 +291,22 @@ func TestMessagesAndRatings(t *testing.T) {
 	if r := do(h, http.MethodPost, "/api/bots/docs/messages", `{"message":"fails"}`, auth); r.code != http.StatusBadGateway {
 		t.Errorf("failed run: %d", r.code)
 	}
+	// chat_bots: the bot, and when the plugin started.
+	_, text := callTool(t, p.listBots, map[string]any{})
+	var bots struct {
+		Bots    []string `json:"bots"`
+		Started string   `json:"started"`
+	}
+	if err := json.Unmarshal([]byte(text), &bots); err != nil || len(bots.Bots) != 1 || bots.Bots[0] != "docs" || bots.Started == "" {
+		t.Errorf("chat_bots: %s", text)
+	}
 	// Taken out: gone, its conversations with it.
 	res, _ := callTool(t, p.remove, map[string]any{"bot": "docs"})
 	if res.IsError {
 		t.Fatal("remove")
+	}
+	if _, text := callTool(t, p.listBots, map[string]any{}); !strings.Contains(text, `"bots":[]`) {
+		t.Errorf("chat_bots after remove: %s", text)
 	}
 	if r := do(h, http.MethodGet, "/api/bots/docs", "", auth); r.code != 404 {
 		t.Errorf("after remove: %d", r.code)
@@ -420,7 +432,8 @@ func TestManifest(t *testing.T) {
 		} `json:"tools"`
 	}
 	_ = json.Unmarshal(b, &m)
-	if m.Name != "chat" || len(m.Tools) != 2 || m.Tools[0].Name != "chat_configure" || m.Tools[0].Access != "write" || m.Tools[1].Name != "chat_remove" {
+	if m.Name != "chat" || len(m.Tools) != 3 || m.Tools[0].Name != "chat_configure" || m.Tools[0].Access != "write" || m.Tools[1].Name != "chat_remove" ||
+		m.Tools[2].Name != "chat_bots" || m.Tools[2].Access != "read" {
 		t.Errorf("%s", b)
 	}
 	// gosidian refuses a tool whose input names project: it is in _meta.

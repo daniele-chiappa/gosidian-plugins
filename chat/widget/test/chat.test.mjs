@@ -8,7 +8,7 @@ import vm from 'node:vm'
 const code = readFileSync(new URL('../dist/chat.js', import.meta.url), 'utf8')
 const window = {}
 vm.runInNewContext(code, { window, document: undefined, console })
-const { render, escapeHtml, groupSources, scopeLevels, figures } = window.GosidianChat._internal
+const { render, escapeHtml, groupSources, scopeLevels, figures, byNumber } = window.GosidianChat._internal
 
 test('escapes the markup of an answer', () => {
   assert.equal(escapeHtml(`<b a="1">'x'&</b>`), '&lt;b a=&quot;1&quot;&gt;&#39;x&#39;&amp;&lt;/b&gt;')
@@ -68,4 +68,21 @@ test('an image the plugin serves comes from where the widget came from', () => {
   const f = figures([{ url: 'http://127.0.0.1:8095/api/bots/b/images/0a1f', title: 'x' }, { url: 'https://docs.example.com/a.png' }], 'http://192.0.2.5:8095')
   assert.equal(f[0].url, 'http://192.0.2.5:8095/api/bots/b/images/0a1f')
   assert.equal(f[1].url, 'https://docs.example.com/a.png')
+})
+
+test('an image where the text marks it, the list going on with its numbers', () => {
+  const figs = byNumber(figures([{ n: 2, url: 'https://c.example/api/bots/b/images/0a', title: 'Finestra "Ordini" <b>' }, { url: 'https://c.example/x.png' }], '', 40))
+  assert.equal(figs.size, 1)
+  const html = render('Passi:\n1. apri\n[img:2]\n2. salva\n[img:9]\nfine', figs)
+  assert.equal(html, '<p>Passi:</p><ol><li>apri</li></ol>' +
+    '<figure class="fig"><img class="zoom" src="https://c.example/api/bots/b/images/0a" alt="Finestra &quot;Ordini&quot; &lt;b&gt;" loading="lazy" referrerpolicy="no-referrer">' +
+    '<figcaption>Finestra &quot;Ordini&quot; &lt;b&gt;</figcaption></figure><ol start="2"><li>salva</li></ol><p>fine</p>')
+  // Inside a line, a mark is text; a heading is a line of its own.
+  assert.equal(render('vedi [img:2] qui\n## Avvio', figs), '<p>vedi [img:2] qui</p><p class="h">Avvio</p>')
+})
+
+test('an image without a number keeps none, and the widget takes forty at most where asked', () => {
+  const f = figures(Array.from({ length: 50 }, (_, i) => ({ n: i, url: `https://x/${i}` })), '', 40)
+  assert.equal(f.length, 40)
+  assert.equal(JSON.parse(JSON.stringify(figures([{ url: 'https://x/a' }])))[0].n, undefined)
 })

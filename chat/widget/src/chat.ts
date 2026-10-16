@@ -26,11 +26,16 @@ interface Source {
   section?: string
   title?: string
   url?: string
+  /** The passage as the documentation has it, its images as [img:n] lines. */
+  text?: string
+  images?: Figure[]
 }
 
 interface Figure {
   url?: string
   title?: string
+  /** The image's number: a line [img:n] of the text shows it there. */
+  n?: number
 }
 
 interface Answer {
@@ -38,8 +43,11 @@ interface Answer {
   sources?: Source[]
   turn?: string
   images?: Figure[]
+  more_images?: Figure[]
   non_so?: boolean
 }
+
+type Shown = { url: string; title: string; n?: number }
 
 interface ScopeInfo {
   name: string
@@ -74,8 +82,17 @@ function inline(s: string): string {
     .replace(/\[(\d{1,2}(?:\s*,\s*\d{1,2})*)\]/g, '<sup class="cite">[$1]</sup>')
 }
 
-/** An answer as HTML: escaped first, then paragraphs and lists. */
-function render(text: string): string {
+/** An image as HTML, its address and title escaped: as wide as the text
+ *  around it, opened large with a click. */
+function figureHtml(f: Shown): string {
+  const cap = f.title ? `<figcaption>${escapeHtml(f.title)}</figcaption>` : ''
+  return `<figure class="fig"><img class="zoom" src="${escapeHtml(f.url)}" alt="${escapeHtml(f.title)}" loading="lazy" referrerpolicy="no-referrer">${cap}</figure>`
+}
+
+/** An answer as HTML: escaped first, then paragraphs, lists, headings
+ *  and, on a line of its own, [img:n], the image n of figs (a number not
+ *  among them is left out). */
+function render(text: string, figs: Map<number, Shown> = new Map()): string {
   const lines = escapeHtml(text).split('\n')
   const out: string[] = []
   let list: 'ul' | 'ol' | '' = ''
@@ -90,17 +107,33 @@ function render(text: string): string {
   }
   for (const raw of lines) {
     const line = raw.trimEnd()
+    const img = /^\s*\[img:(\d{1,4})\]$/.exec(line)
+    if (img) {
+      flush()
+      close()
+      const f = figs.get(Number(img[1]))
+      if (f) out.push(figureHtml(f))
+      continue
+    }
+    const head = /^#{1,6}\s+(.*)$/.exec(line)
+    if (head) {
+      flush()
+      close()
+      out.push(`<p class="h">${inline(head[1])}</p>`)
+      continue
+    }
     const ul = /^\s*[-*]\s+(.*)$/.exec(line)
-    const ol = /^\s*\d+[.)]\s+(.*)$/.exec(line)
+    const ol = /^\s*(\d+)[.)]\s+(.*)$/.exec(line)
     if (ul || ol) {
       flush()
       const kind = ul ? 'ul' : 'ol'
       if (list !== kind) {
         close()
-        out.push(`<${kind}>`)
+        // A list an image broke goes on with its numbers.
+        out.push(ol && ol[1] !== '1' ? `<ol start="${Number(ol[1])}">` : `<${kind}>`)
         list = kind
       }
-      out.push(`<li>${inline((ul ?? ol)![1])}</li>`)
+      out.push(`<li>${inline(ul ? ul[1] : ol![2])}</li>`)
     } else if (line.trim() === '') {
       flush()
       close()
@@ -133,20 +166,27 @@ function groupSources(list: Source[]): { name: string; url?: string; numbers: nu
   return out.map(({ name, url, numbers }) => ({ name, url, numbers }))
 }
 
-/** The images of an answer the widget shows: http(s) addresses only, at
- *  most eight. One the plugin serves (/api/bots/<bot>/images/…) is taken
- *  from base, where the widget came from: the plugin may be reached at
- *  another address than its CHAT_PUBLIC_URL (a tunnel, a LAN). */
-function figures(list: Figure[], base = ''): { url: string; title: string }[] {
+/** The images the widget shows: http(s) addresses only, at most max
+ *  (eight by default). One the plugin serves (/api/bots/<bot>/images/…) is
+ *  taken from base, where the widget came from: the plugin may be reached
+ *  at another address than its CHAT_PUBLIC_URL (a tunnel, a LAN). */
+function figures(list: Figure[], base = '', max = 8): Shown[] {
   return list
     .filter((f) => typeof f.url === 'string' && /^https?:\/\//.test(f.url))
-    .slice(0, 8)
+    .slice(0, max)
     .map((f) => {
       let url = f.url as string
       const own = /^https?:\/\/[^/]+(\/api\/bots\/[^/?#]+\/images\/[0-9a-f]+)$/.exec(url)
       if (base && own) url = base + own[1]
-      return { url, title: f.title || '' }
+      const out: Shown = { url, title: f.title || '' }
+      if (typeof f.n === 'number') out.n = f.n
+      return out
     })
+}
+
+/** The images by their number, those that have one. */
+function byNumber(list: Shown[]): Map<number, Shown> {
+  return new Map(list.filter((f) => f.n !== undefined).map((f) => [f.n as number, f]))
 }
 
 /** The selects of nested scopes, given the names chosen so far: one per
@@ -197,7 +237,18 @@ header { padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 
 .figs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .figs figure { margin: 0; max-width: 220px; }
 .figs img { display: block; max-width: 100%; max-height: 160px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
-.figs figcaption { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.figs figcaption, .fig figcaption { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.fig { margin: 6px 0 8px; }
+.fig img { display: block; max-width: 100%; height: auto; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); }
+img.zoom { cursor: zoom-in; }
+.msg .h { font-weight: 600; }
+.more, .src { margin-top: 6px; font-size: 12px; color: var(--muted); }
+.more summary, .src summary { cursor: pointer; }
+.srctext { margin-top: 4px; padding: 4px 0 2px 10px; border-left: 2px solid var(--line); color: var(--fg); font-size: 13px; }
+.view { position: fixed; inset: 0; z-index: 2147483647; display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .82); cursor: zoom-out; }
+.view[hidden] { display: none; }
+.view img { max-width: 96vw; max-height: 94vh; background: #fff; border-radius: 4px; }
 .person { display: flex; justify-content: flex-end; padding: 0 14px 8px; }
 .person button, .ask button { font: inherit; font-size: 12px; border: 1px solid var(--line); background: var(--bg); color: var(--accent); border-radius: 6px; padding: 3px 10px; cursor: pointer; }
 .ask { display: flex; flex-direction: column; gap: 6px; }
@@ -255,7 +306,26 @@ function mount(opts: ChatOptions): void {
   const summary = el('summary', '', 'Filtri: tutto')
   filters.append(summary, scopes)
   chat.append(header, log, form, person)
-  wrap.append(chat)
+  // An image opened large, over the page: a click or Esc closes it.
+  const view = el('div', 'view')
+  view.hidden = true
+  view.setAttribute('role', 'dialog')
+  const big = el('img')
+  big.referrerPolicy = 'no-referrer'
+  view.append(big)
+  view.onclick = () => (view.hidden = true)
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') view.hidden = true
+  })
+  log.addEventListener('click', (ev) => {
+    const t = ev.target
+    if (t instanceof HTMLImageElement && t.classList.contains('zoom')) {
+      big.src = t.src
+      big.alt = t.alt
+      view.hidden = false
+    }
+  })
+  wrap.append(chat, view)
   root.append(style, wrap)
 
   const headers = (): Record<string, string> => {
@@ -450,29 +520,35 @@ function mount(opts: ChatOptions): void {
     return row
   }
 
+  // A row of small images, each opened large with a click.
+  const gallery = (figs: Shown[]): HTMLElement => {
+    const wrap = el('div', 'figs')
+    for (const f of figs) {
+      const fig = el('figure')
+      const img = el('img', 'zoom')
+      img.src = f.url
+      img.alt = f.title
+      img.loading = 'lazy'
+      img.referrerPolicy = 'no-referrer'
+      fig.append(img)
+      if (f.title) fig.append(el('figcaption', '', f.title))
+      wrap.append(fig)
+    }
+    return wrap
+  }
+
   const answer = (a: Answer) => {
     const box = el('div', 'msg bot')
-    box.innerHTML = render(a.text ?? '')
-    const figs = figures(a.images ?? [], opts.base)
-    if (figs.length) {
-      const wrap = el('div', 'figs')
-      for (const f of figs) {
-        const fig = el('figure')
-        const link = el('a')
-        link.href = f.url
-        link.target = '_blank'
-        link.rel = 'noopener noreferrer'
-        const img = el('img')
-        img.src = f.url
-        img.alt = f.title
-        img.loading = 'lazy'
-        img.referrerPolicy = 'no-referrer'
-        link.append(img)
-        fig.append(link)
-        if (f.title) fig.append(el('figcaption', '', f.title))
-        wrap.append(fig)
-      }
-      box.append(wrap)
+    // The images with a number go where the text marks them; the others under it.
+    const figs = figures(a.images ?? [], opts.base, 40)
+    box.innerHTML = render(a.text ?? '', byNumber(figs))
+    const loose = figs.filter((f) => f.n === undefined).slice(0, 8)
+    if (loose.length) box.append(gallery(loose))
+    const more = figures(a.more_images ?? [], opts.base, 12)
+    if (more.length) {
+      const d = el('details', 'more')
+      d.append(el('summary', '', `Altre immagini (${more.length})`), gallery(more))
+      box.append(d)
     }
     const groups = groupSources(a.sources ?? [])
     if (groups.length) {
@@ -492,6 +568,18 @@ function mount(opts: ChatOptions): void {
         }
       })
       box.append(src)
+    }
+    // The sources the pipeline hands as the documentation has them, each opened with a click.
+    for (const s of a.sources ?? []) {
+      if (!s.text) continue
+      const d = el('details', 'src')
+      const name = s.title || (s.doc ?? '').split('/').pop()?.replace(/\.md$/, '') || ''
+      const where = s.section || s.sezione || ''
+      d.append(el('summary', '', `[${s.n ?? ''}] ${name}${where ? ' › ' + where : ''}`))
+      const body = el('div', 'srctext')
+      body.innerHTML = render(s.text, byNumber(figures(s.images ?? [], opts.base, 40)))
+      d.append(body)
+      box.append(d)
     }
     if (a.turn) box.append(rateRow(a.turn))
     if (a.non_so && handoff) {
@@ -543,7 +631,7 @@ function mount(opts: ChatOptions): void {
 // The script mounts the chat its tag describes.
 ;(function auto() {
   const w = window as unknown as { GosidianChat?: unknown }
-  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources, scopeLevels, figures } }
+  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources, scopeLevels, figures, byNumber } }
   const script = typeof document !== 'undefined' ? (document.currentScript as HTMLScriptElement | null) : null
   if (!script?.dataset.bot) return
   const container = document.getElementById(script.dataset.container || '')

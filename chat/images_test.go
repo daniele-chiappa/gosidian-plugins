@@ -70,22 +70,44 @@ func TestImages(t *testing.T) {
 	if _, text := callTool(t, p.publishImages, map[string]any{"bot": "nobot", "images": []any{}}); !strings.Contains(text, "no bot") {
 		t.Errorf("a bot unknown: %s", text)
 	}
+	five := []any{ref("/f/a.png", pngBytes), ref("/f/a.png", pngBytes), ref("/f/a.png", pngBytes), ref("/f/a.png", pngBytes), ref("/f/a.png", pngBytes)}
+	if _, text := callTool(t, p.publishImages, map[string]any{"bot": "docs", "images": five}); !strings.Contains(text, "CHAT_IMAGES_PER_CALL") {
+		t.Errorf("more than CHAT_IMAGES_PER_CALL: %s", text)
+	}
+	// The same image twice: one address, one copy.
+	_, text = callTool(t, p.publishImages, map[string]any{"bot": "docs", "images": five[:2]})
+	if err := json.Unmarshal([]byte(text), &out); err != nil || len(out.Images) != 2 || out.Images[0].URL != out.Images[1].URL {
+		t.Errorf("the same image twice: %s", text)
+	}
 }
 
 func TestImages_Room(t *testing.T) {
 	s := NewImages(1000, time.Hour)
 	now := time.Now()
-	a := s.Put("b", "image/png", make([]byte, 600), now)
-	b := s.Put("b", "image/png", make([]byte, 600), now)
+	a := s.Put("b", "image/png", bytes.Repeat([]byte{1}, 600), now)
+	b := s.Put("b", "image/png", bytes.Repeat([]byte{2}, 600), now)
 	if _, ok := s.Get("b", a, now); ok {
 		t.Error("the oldest stays past the room")
 	}
 	if _, ok := s.Get("b", b, now); !ok {
 		t.Error("the newest went")
 	}
+	// The same bytes again: the same id, kept longer; another bot's are its own.
+	later := now.Add(30 * time.Minute)
+	if again := s.Put("b", "image/png", bytes.Repeat([]byte{2}, 600), later); again != b || s.bytes != 600 {
+		t.Errorf("the same image: %s, %d bytes", again, s.bytes)
+	}
+	if _, ok := s.Get("b", b, now.Add(80*time.Minute)); !ok {
+		t.Error("an image handed again expires with its first ttl")
+	}
 	s.Bot("b")
-	if _, ok := s.Get("b", b, now); ok || s.bytes != 0 {
+	if _, ok := s.Get("b", b, now); ok || s.bytes != 0 || len(s.bySum) != 0 {
 		t.Errorf("a bot gone keeps its images: %d", s.bytes)
+	}
+	// One that expired is kept anew, with another id.
+	c := s.Put("b", "image/png", bytes.Repeat([]byte{3}, 100), now)
+	if d := s.Put("b", "image/png", bytes.Repeat([]byte{3}, 100), now.Add(2*time.Hour)); d == c || s.bytes != 100 {
+		t.Errorf("an expired image handed again: %s %s, %d bytes", c, d, s.bytes)
 	}
 }
 

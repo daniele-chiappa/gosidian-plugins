@@ -24,7 +24,7 @@ gosidian need not be on the internet: only the plugin is.
 ```yaml
 services:
   gosidian-chat:
-    image: ghcr.io/daniele-chiappa/gosidian-chat:0.3.0
+    image: ghcr.io/daniele-chiappa/gosidian-chat:0.4.0
     restart: unless-stopped
     read_only: true
     environment:
@@ -69,6 +69,7 @@ reach it at (the bots' pipelines start there), and its secrets
 | `CHAT_IMAGE_MAX_BYTES` | `10485760` | the bytes of one image of an answer |
 | `CHAT_IMAGES_MAX_BYTES` | `268435456` | the images kept in memory, all together; the oldest go first |
 | `CHAT_IMAGES_TTL` | `CHAT_SESSION_TTL` | how long an image of an answer is served |
+| `CHAT_IMAGES_PER_CALL` | `40` | the images one call of the node `images` hands: those of an answer, the others and those of its sources |
 
 The plugin keeps nothing on disk: the bots and their secrets live in
 memory, and gosidian hands them again every five minutes, so a restart
@@ -100,8 +101,14 @@ in the page's `sessionStorage`.
 With the note's `dates`, the chat offers a day: the answer is about the
 documents as they were then. With `handoff`, a button asks for a person,
 also after an answer that found nothing: a short form, with a contact
-when the note wants one, hands the conversation on. An answer's images
-show under it, each a link to the whole picture.
+when the note wants one, hands the conversation on.
+
+An answer's images show where its text marks them: a line `[img:n]` is
+the image of `images` with that `n`, as wide as the answer. Those without
+a number show under it; `more_images` fold under «Altre immagini». A
+source with its `text`, the passage as the documentation has it, opens
+with a click, its own `images` in place. Any image opens large with a
+click; a click or Esc closes it.
 
 A flat list of scopes shows as boxes, several of which may be chosen.
 Nested scopes, which gosidian makes of a folder's tree (the note's
@@ -118,7 +125,7 @@ the bot's note, with a token it signs for the reader in the fragment
 | Request | |
 |---|---|
 | `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`, and `children` for nested ones), `scope_labels`, `max_message`, `handoff` (`label`, `contact`, or none), `dates` |
-| `POST /api/bots/<bot>/messages` | `{message, session, scopes, as_of}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, `sources`, each with its `url`, `images`, `non_so`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level; `as_of`, a day (YYYY-MM-DD), for a bot with `dates` |
+| `POST /api/bots/<bot>/messages` | `{message, session, scopes, as_of}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, with an image's `[img:n]` lines; `sources`, each with its `url`, and its `text` and `images` to open it; `images`, each with its `url`, `title` and `n`; `more_images`; `non_so`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level; `as_of`, a day (YYYY-MM-DD), for a bot with `dates` |
 | `POST /api/bots/<bot>/handoff` | `{session, message, contact}` → `{session, answer}`: the bot's pipeline gets the conversation (`kind: handoff`) and hands it on; one a minute per conversation |
 | `GET /api/bots/<bot>/images/<id>` | an image of an answer, png, jpeg, gif or webp: its address is its key, without a token |
 | `POST /api/bots/<bot>/ratings` | `{session, turn, rating, comment}`: `turn` an answer of the conversation, `rating` from -10 to 10 |
@@ -141,9 +148,11 @@ A bot's pipeline shows images with its answer through the node
 png, jpeg, gif or webp files, which gosidian hands by reference. The
 plugin fetches each one, checks its size, its SHA-256 and its type by its
 bytes, keeps it in memory and gives `images` (`url`, `name`, `mime`,
-`size`) and `skipped` (`name`, `error`). The pipeline puts the addresses
-in its answer, as `images` (`url`, `title`): the widget's page cannot
-read gosidian's files, the plugin's address it can.
+`size`) and `skipped` (`name`, `error`); the same image handed again
+keeps its address, and one copy. The pipeline puts the addresses in its
+answer, as `images` (`url`, `title`, `n`), `more_images` and the
+`images` of its sources: the widget's page cannot read gosidian's files,
+the plugin's address it can.
 
 ```yaml
 - id: show

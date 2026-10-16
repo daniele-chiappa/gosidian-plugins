@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -32,6 +33,9 @@ type Plugin struct {
 	// files fetches the files gosidian hands by reference: no redirect.
 	files *http.Client
 	now   func() time.Time
+	// started is when the plugin started: gosidian asks it with the bots,
+	// and hands them again when it changed (a restart keeps none).
+	started time.Time
 
 	mu   sync.RWMutex
 	bots map[string]*Bot
@@ -45,7 +49,7 @@ func NewPlugin(set Settings, log *slog.Logger) *Plugin {
 		files: &http.Client{Timeout: time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return errors.New("a file by reference does not redirect")
 		}},
-		now: func() time.Time { return time.Now().UTC() }, bots: map[string]*Bot{}}
+		now: func() time.Time { return time.Now().UTC() }, started: time.Now().UTC(), bots: map[string]*Bot{}}
 }
 
 func (p *Plugin) bot(name string) (*Bot, bool) {
@@ -78,6 +82,8 @@ func (p *Plugin) Manifest() map[string]any {
 				"description": "Configures a bot, as gosidian does from its note type: chat: its scopes, who may chat, the run token of its pipeline. Gosidian calls it; an agent has no use for it"},
 			map[string]any{"name": "chat_remove", "access": "write", "input_schema": json.RawMessage(removeSchema),
 				"description": "Takes a bot out, as gosidian does when its note goes"},
+			map[string]any{"name": "chat_bots", "access": "read", "input_schema": json.RawMessage(`{"type": "object", "properties": {}}`),
+				"description": "The bots the plugin has, and since when it runs: gosidian asks it to hand them again after a restart"},
 		},
 		"nodes": []any{
 			map[string]any{"name": "images", "tool": "chat_images", "files": []string{"images"}, "file_refs": true,
@@ -127,6 +133,20 @@ func (p *Plugin) configure(_ context.Context, req mcp.CallToolRequest) (*mcp.Cal
 		"embed_url": p.set.PublicURL + "/embed/" + b.Name, "script_url": p.set.PublicURL + "/chat.js"})
 }
 
+// listBots is chat_bots: the bots the plugin has, and when it started. It
+// keeps them in memory, so one restarted has none until gosidian hands
+// them again.
+func (p *Plugin) listBots(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	p.mu.RLock()
+	names := make([]string, 0, len(p.bots))
+	for n := range p.bots {
+		names = append(names, n)
+	}
+	p.mu.RUnlock()
+	sort.Strings(names)
+	return p.result(map[string]any{"bots": names, "started": p.started.Format(time.RFC3339)})
+}
+
 func (p *Plugin) remove(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	name := req.GetString("bot", "")
 	p.mu.Lock()
@@ -149,6 +169,7 @@ func (p *Plugin) Handler() http.Handler {
 		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) { return p.result(p.Manifest()) })
 	ms.AddTool(mcp.NewToolWithRawSchema("chat_configure", "Configures a bot", json.RawMessage(configureSchema)), p.configure)
 	ms.AddTool(mcp.NewToolWithRawSchema("chat_remove", "Takes a bot out", json.RawMessage(removeSchema)), p.remove)
+	ms.AddTool(mcp.NewToolWithRawSchema("chat_bots", "The bots the plugin has", json.RawMessage(`{"type": "object", "properties": {}}`)), p.listBots)
 	ms.AddTool(mcp.NewToolWithRawSchema("chat_images", "Images of a bot's answer", json.RawMessage(imagesSchema)), p.publishImages)
 	mcpH := server.NewStreamableHTTPServer(ms)
 	mux := http.NewServeMux()

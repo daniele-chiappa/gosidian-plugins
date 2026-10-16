@@ -1,8 +1,8 @@
 name: docling
-# A PR, or a push that touches docling/, checks the server. A tag
-# docling/vX.Y.Z builds its image (amd64, about 5 GB), tries it, pushes it
-# to GHCR as :X.Y.Z and :latest, and makes the release with its section of
-# docling/CHANGELOG.md.
+# A PR, or a push that touches docling/, checks the server and tests its
+# slides. A tag docling/vX.Y.Z builds its image (amd64, about 5 GB), tries
+# it, pushes it to GHCR as :X.Y.Z and :latest, and makes the release with
+# its section of docling/CHANGELOG.md.
 
 on:
   # Every PR runs the tests of both plugins, required by the protection of
@@ -31,6 +31,11 @@ jobs:
 
       - name: Compile
         run: docker run --rm -v "$PWD/docling:/src:ro" python:3.12-slim python -X pycache_prefix=/tmp -m py_compile /src/server.py
+
+      - name: Test the slides
+        # Decks made by the tests with python-pptx, read by docling's pptx
+        # reader: docling-slim, not the image.
+        run: sh docling/scripts/test.sh
 
   image:
     name: Build & push image

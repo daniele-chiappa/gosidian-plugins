@@ -1,9 +1,9 @@
 # Third-party notices: gosidian-docling
 
-The plugin's own code (`server.py`, the Dockerfile) is MIT-licensed (the
-`LICENSE` at the root of this repository). Its image holds the works of
-others, unmodified, under their own licenses; the texts this folder adds
-are in the image under `/licenses`.
+The plugin's own code (`server.py`, its tests, the Dockerfile) is
+MIT-licensed (the `LICENSE` at the root of this repository). Its image
+holds the works of others, unmodified, under their own licenses; the texts
+this folder adds are in the image under `/licenses`.
 
 ## The models
 
@@ -25,7 +25,7 @@ Python 3.12 (PSF-2.0), and 114 packages installed with pip. The main ones:
 | Package | License |
 |---|---|
 | docling, docling-core, docling-ibm-models, docling-parse | MIT |
-| mcp | MIT |
+| mcp, python-pptx | MIT |
 | torch (CPU build), transformers, huggingface-hub, safetensors, rapidocr | Apache-2.0 |
 | torchvision, uvicorn, numpy, scipy | BSD |
 | pypdfium2 (with PDFium) | BSD-3-Clause and Apache-2.0 |

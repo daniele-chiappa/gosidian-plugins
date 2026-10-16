@@ -56,6 +56,10 @@ type Settings struct {
 	ImageMaxBytes  int64
 	ImagesMaxBytes int64
 	ImagesTTL      time.Duration
+	// ImagesPerCall caps the images one call of the node images hands
+	// (CHAT_IMAGES_PER_CALL): those of an answer, of the rest, and of its
+	// sources.
+	ImagesPerCall int
 }
 
 var pluginName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -103,7 +107,8 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 		def  int
 	}{{"CHAT_MAX_SESSIONS", &s.MaxSessions, 10000}, {"CHAT_MAX_HISTORY", &s.MaxHistory, 10},
 		{"CHAT_PER_MINUTE", &s.PerMinute, 10}, {"CHAT_PER_SESSION", &s.PerSession, 200},
-		{"CHAT_MAX_MESSAGE", &s.MaxMessage, 2000}, {"CHAT_IP_PER_MINUTE", &s.IPPerMinute, 60}} {
+		{"CHAT_MAX_MESSAGE", &s.MaxMessage, 2000}, {"CHAT_IP_PER_MINUTE", &s.IPPerMinute, 60},
+		{"CHAT_IMAGES_PER_CALL", &s.ImagesPerCall, 40}} {
 		if *n.dst, err = envInt(getenv, n.name, n.def); err != nil {
 			return s, err
 		}

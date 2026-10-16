@@ -4,6 +4,33 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.4.0] — 2026-10-17
+
+Images in place in an answer, and the bots back at once after a restart.
+A bot's pipeline marks where an image goes with a line `[img:n]`
+(gosidian 2.94 numbers the images of a section, `note.sections` with
+`media_numbers`); gosidian 2.94 asks `chat_bots`, and with 2.93 the bots
+come back within five minutes as before. The manifest changes (the tool
+`chat_bots`), and the owner accepts it again.
+
+### Added
+- **Images in place**: a line `[img:n]` of an
+  answer shows the image of `images` with that `n` there, as wide as the
+  answer; `more_images` fold under «Altre immagini»; a source with its
+  `text` opens with a click, its `images` in place. Any image opens large
+  with a click, and closes with a click or Esc. Headings show bold, and a
+  numbered list an image broke goes on with its numbers.
+- `chat_bots` (read): the bots the plugin has, and when it started.
+  gosidian 2.94 asks it every 30 seconds, and hands the bots again at once
+  after a restart instead of up to five minutes later.
+- `CHAT_IMAGES_PER_CALL` (40): the images one call of the node `images`
+  hands; it was a constant of 20.
+
+### Changed
+- The same image handed again keeps its address and one copy in memory,
+  kept for another `CHAT_IMAGES_TTL`: the screenshots of a section come
+  back with each answer that cites it.
+
 ## [0.3.0] — 2026-10-16
 
 Images in an answer, a person and a day. The button for a person and the

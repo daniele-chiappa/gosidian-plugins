@@ -31,14 +31,17 @@ type image struct {
 	bot     string
 	mime    string
 	data    []byte
+	sum     string
 	expires time.Time
 }
 
 // Images keeps the images in memory, at most max bytes together, each
-// for ttl; the oldest go first.
+// for ttl; the oldest go first. An image a bot hands again is kept once:
+// the screenshots of a section come back with each answer that cites it.
 type Images struct {
 	mu    sync.Mutex
 	byID  map[string]*image
+	bySum map[string]string
 	order []string
 	bytes int64
 	max   int64
@@ -47,18 +50,35 @@ type Images struct {
 
 // NewImages is a store of at most max bytes, each image kept for ttl.
 func NewImages(max int64, ttl time.Duration) *Images {
-	return &Images{byID: map[string]*image{}, max: max, ttl: ttl}
+	return &Images{byID: map[string]*image{}, bySum: map[string]string{}, max: max, ttl: ttl}
 }
 
-// Put keeps an image of a bot and gives its id.
+// Put keeps an image of a bot and gives its id: the id it has, when the
+// bot handed the same bytes before, kept another ttl.
 func (s *Images) Put(bot, mime string, data []byte, now time.Time) string {
+	h := sha256.Sum256(data)
+	key := bot + "\x00" + hex.EncodeToString(h[:])
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if id, ok := s.bySum[key]; ok {
+		if im := s.byID[id]; im != nil && !now.After(im.expires) {
+			im.expires = now.Add(s.ttl)
+			// The newest now: the last to go.
+			for i, o := range s.order {
+				if o == id {
+					s.order = append(append(s.order[:i:i], s.order[i+1:]...), id)
+					break
+				}
+			}
+			return id
+		}
+	}
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)
 	id := hex.EncodeToString(b)
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.drop(now, int64(len(data)))
-	s.byID[id] = &image{bot: bot, mime: mime, data: data, expires: now.Add(s.ttl)}
+	s.byID[id] = &image{bot: bot, mime: mime, data: data, sum: key, expires: now.Add(s.ttl)}
+	s.bySum[key] = id
 	s.order = append(s.order, id)
 	s.bytes += int64(len(data))
 	return id
@@ -76,6 +96,9 @@ func (s *Images) drop(now time.Time, need int64) {
 		if now.After(im.expires) || s.bytes+need > s.max {
 			s.bytes -= int64(len(im.data))
 			delete(s.byID, id)
+			if s.bySum[im.sum] == id {
+				delete(s.bySum, im.sum)
+			}
 			continue
 		}
 		keep = append(keep, id)
@@ -102,20 +125,18 @@ func (s *Images) Bot(bot string) {
 		if im.bot == bot {
 			s.bytes -= int64(len(im.data))
 			delete(s.byID, id)
+			delete(s.bySum, im.sum)
 		}
 	}
 }
 
 const imagesSchema = `{"type": "object", "required": ["bot", "images"], "properties": {
   "bot": {"type": "string", "description": "the bot whose answer shows them"},
-  "images": {"type": "array", "items": {"type": "string"}, "description": "vault paths of images (png, jpeg, gif, webp), at most 20"}}}`
+  "images": {"type": "array", "items": {"type": "string"}, "description": "vault paths of images (png, jpeg, gif, webp), at most CHAT_IMAGES_PER_CALL (40 by default)"}}}`
 
 const imagesOutput = `{"type": "object", "properties": {
   "images": {"type": "array", "items": {"type": "object", "properties": {"url": {"type": "string"}, "name": {"type": "string"}, "mime": {"type": "string"}, "size": {"type": "integer"}}}},
   "skipped": {"type": "array", "items": {"type": "object", "properties": {"name": {"type": "string"}, "error": {"type": "string"}}}}}}`
-
-// maxImagesPerCall caps the images of one answer.
-const maxImagesPerCall = 20
 
 // fileRef is a file gosidian hands by reference.
 type fileRef struct {
@@ -141,8 +162,8 @@ func (p *Plugin) publishImages(ctx context.Context, req mcp.CallToolRequest) (*m
 	if _, ok := p.bot(in.Bot); !ok {
 		return mcp.NewToolResultError(fmt.Sprintf("no bot %q (gosidian configures it from its note)", in.Bot)), nil
 	}
-	if len(in.Images) > maxImagesPerCall {
-		return mcp.NewToolResultError(fmt.Sprintf("images: at most %d", maxImagesPerCall)), nil
+	if len(in.Images) > p.set.ImagesPerCall {
+		return mcp.NewToolResultError(fmt.Sprintf("images: at most %d (CHAT_IMAGES_PER_CALL)", p.set.ImagesPerCall)), nil
 	}
 	out := []map[string]any{}
 	skipped := []map[string]string{}
