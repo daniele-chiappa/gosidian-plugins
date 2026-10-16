@@ -1,0 +1,14 @@
+{
+  "name": "gosidian-chat-widget",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The chat widget of gosidian-chat, built into chat.js",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "tsc -p . && node --test test/chat.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

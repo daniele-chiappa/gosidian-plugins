@@ -1,0 +1,135 @@
+name: chat
+# A PR, or a push that touches chat/, tests the plugin: the server (Go) and
+# the widget (TypeScript). A tag chat/vX.Y.Z builds its image for amd64,
+# tries it (a bot configured through its tool, its API and its page),
+# pushes it to GHCR as :X.Y.Z and :latest, and makes the release with its
+# section of chat/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["chat/**", ".github/workflows/chat.yml"]
+    tags: ["chat/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-chat
+
+jobs:
+  test:
+    name: Test the chat
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Vet and test the server and the widget
+        run: sh chat/scripts/test.sh
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/chat/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#chat/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            chat/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "chat/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and try the image
+        # The version comes from the tag's name: through the environment,
+        # never pasted into the script.
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker build --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" -t "$BASE:$VERSION" chat/
+          docker run -d --name chat-smoke --network host --read-only -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            -e CHAT_PUBLIC_URL=https://chat.example.com "$BASE:$VERSION"
+          for _ in $(seq 1 30); do
+            if docker exec chat-smoke /usr/local/bin/gosidian-chat healthcheck 2>/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8000/health | tee "$RUNNER_TEMP/health.json"
+          grep -q "\"version\":\"$VERSION\"" "$RUNNER_TEMP/health.json"
+          docker exec chat-smoke test -s /licenses/go-modules/INDEX
+          curl -fsS http://127.0.0.1:8000/chat.js | grep -q 'GosidianChat'
+          # A bot configured as gosidian does, open to anyone: its API and
+          # its page answer.
+          mcp() {
+            curl -fsS http://127.0.0.1:8000/mcp -H 'Authorization: Bearer smoke' -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' "$@"
+          }
+          mcp -D "$RUNNER_TEMP/session.txt" -o /dev/null \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+          SESSION=$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d: *//p' "$RUNNER_TEMP/session.txt" | tr -d '\r')
+          mcp -H "Mcp-Session-Id: $SESSION" -H 'MCP-Protocol-Version: 2025-06-18' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"chat_configure","_meta":{"gosidian/project":"p"},"arguments":{"bot":"smoke","title":"Smoke","access":{"open":true},"run":{"url":"http://127.0.0.1:9/runs","token":"gosidian_run_smoke"}}}}' \
+            | tee "$RUNNER_TEMP/configure.txt"
+          grep -q 'https://chat.example.com/embed/smoke' "$RUNNER_TEMP/configure.txt"
+          curl -fsS http://127.0.0.1:8000/api/bots/smoke | grep -q '"title":"Smoke"'
+          curl -fsS -D "$RUNNER_TEMP/embed.txt" -o /dev/null http://127.0.0.1:8000/embed/smoke
+          grep -qi "content-security-policy: default-src 'none'" "$RUNNER_TEMP/embed.txt"
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker tag "$BASE:$VERSION" "$BASE:latest"
+          docker push "$BASE:$VERSION"
+          docker push "$BASE:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "chat $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`$BASE:$VERSION\` (amd64)"
+            echo "- \`$BASE:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f chat-smoke || true
