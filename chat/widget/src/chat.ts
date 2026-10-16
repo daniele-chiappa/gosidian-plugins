@@ -34,10 +34,17 @@ interface Answer {
   turn?: string
 }
 
+interface ScopeInfo {
+  name: string
+  label?: string
+  children?: ScopeInfo[]
+}
+
 interface BotInfo {
   title?: string
   welcome?: string
-  scopes?: { name: string; label: string }[]
+  scopes?: ScopeInfo[]
+  scope_labels?: string[]
   max_message?: number
 }
 
@@ -117,6 +124,20 @@ function groupSources(list: Source[]): { name: string; url?: string; numbers: nu
   return out.map(({ name, url, numbers }) => ({ name, url, numbers }))
 }
 
+/** The selects of nested scopes, given the names chosen so far: one per
+ *  level, down the chosen ones while they have children. */
+function scopeLevels(scopes: ScopeInfo[], chosen: string[]): { options: ScopeInfo[]; value: string }[] {
+  const out: { options: ScopeInfo[]; value: string }[] = []
+  let options = scopes
+  for (let i = 0; options.length; i++) {
+    const pick = options.find((s) => s.name === chosen[i])
+    out.push({ options, value: pick ? pick.name : '' })
+    if (!pick?.children?.length) break
+    options = pick.children
+  }
+  return out
+}
+
 const STYLE = `
 :host { all: initial; display: block; height: 100%; font: 14px/1.45 system-ui, sans-serif;
   --bg: #ffffff; --fg: #1f2328; --muted: #656d76; --line: #d0d7de; --me: #ddf4ff; --bot: #f6f8fa; --accent: #0969da; }
@@ -142,6 +163,8 @@ header { padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 
 .rate input[type=range] { width: 120px; }
 .rate input[type=text] { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 2px 6px; }
 .scopes { display: flex; flex-wrap: wrap; gap: 8px; padding: 6px 14px 0; font-size: 12px; color: var(--muted); }
+.scopes label { display: inline-flex; gap: 4px; align-items: center; }
+.scopes select { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; max-width: 220px; }
 form { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--line); }
 textarea { flex: 1; resize: none; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 form button { font: inherit; border: 0; border-radius: 6px; padding: 0 14px; background: var(--accent); color: #fff; cursor: pointer; }
@@ -207,13 +230,51 @@ function mount(opts: ChatOptions): void {
     return body
   }
 
+  // A flat list of scopes: boxes, several may be chosen. Nested ones
+  // (gosidian's folders): a select per level, one scope chosen, the
+  // deepest; none, all of them.
   const chosen = new Set<string>()
+  let path: string[] = []
+  const selects = (tree: ScopeInfo[], labels: string[]) => {
+    scopes.replaceChildren()
+    scopeLevels(tree, path).forEach((lv, i) => {
+      const sel = el('select')
+      const all = el('option', '', 'Tutto')
+      all.value = ''
+      sel.append(all)
+      for (const sc of lv.options) {
+        const o = el('option', '', sc.label || sc.name)
+        o.value = sc.name
+        sel.append(o)
+      }
+      sel.value = lv.value
+      sel.setAttribute('aria-label', labels[i] || `Ambito ${i + 1}`)
+      sel.addEventListener('change', () => {
+        path = sel.value ? [...path.slice(0, i), sel.value] : path.slice(0, i)
+        chosen.clear()
+        if (path.length) chosen.add(path[path.length - 1])
+        selects(tree, labels)
+      })
+      if (labels[i]) {
+        const label = el('label', '', labels[i])
+        label.append(sel)
+        scopes.append(label)
+      } else {
+        scopes.append(sel)
+      }
+    })
+  }
   call('')
     .then((info: BotInfo) => {
       header.textContent = info.title || opts.bot
       if (info.welcome) note(info.welcome)
       if (info.max_message) input.maxLength = info.max_message
-      for (const sc of info.scopes ?? []) {
+      const tree = info.scopes ?? []
+      if (tree.some((sc) => sc.children?.length)) {
+        selects(tree, info.scope_labels ?? [])
+        return
+      }
+      for (const sc of tree) {
         const label = el('label')
         const box = el('input')
         box.type = 'checkbox'
@@ -323,7 +384,7 @@ function mount(opts: ChatOptions): void {
 // The script mounts the chat its tag describes.
 ;(function auto() {
   const w = window as unknown as { GosidianChat?: unknown }
-  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources } }
+  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources, scopeLevels } }
   const script = typeof document !== 'undefined' ? (document.currentScript as HTMLScriptElement | null) : null
   if (!script?.dataset.bot) return
   const container = document.getElementById(script.dataset.container || '')

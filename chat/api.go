@@ -70,12 +70,26 @@ func (p *Plugin) serveAPI(w http.ResponseWriter, r *http.Request) {
 }
 
 func (p *Plugin) info(w http.ResponseWriter, b *Bot) {
-	scopes := make([]map[string]string, 0, len(b.Scopes))
-	for _, sc := range b.Scopes {
-		scopes = append(scopes, map[string]string{"name": sc.Name, "label": sc.Label})
+	labels := b.ScopeLabels
+	if labels == nil {
+		labels = []string{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bot": b.Name, "title": b.Title, "welcome": b.Welcome, "scopes": scopes,
-		"max_message": b.limit("max_message", p.set.MaxMessage)})
+	writeJSON(w, http.StatusOK, map[string]any{"bot": b.Name, "title": b.Title, "welcome": b.Welcome, "scopes": scopeInfo(b.Scopes),
+		"scope_labels": labels, "max_message": b.limit("max_message", p.set.MaxMessage)})
+}
+
+// scopeInfo are scopes as a client sees them: names, labels and children,
+// never the filters.
+func scopeInfo(scopes []Scope) []map[string]any {
+	out := make([]map[string]any, 0, len(scopes))
+	for _, sc := range scopes {
+		m := map[string]any{"name": sc.Name, "label": sc.Label}
+		if len(sc.Children) > 0 {
+			m["children"] = scopeInfo(sc.Children)
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // owner is who a conversation belongs to: the token's subject, or the
@@ -118,7 +132,8 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("message: at most %d characters", max))
 		return
 	}
-	// The scopes chosen among those the bot opens; none chosen, all of them.
+	// The scopes chosen among those the bot opens, at any depth; none
+	// chosen, all of them (the first level, which holds the rest).
 	chosen := in.Scopes
 	if len(chosen) == 0 {
 		for _, sc := range b.Scopes {

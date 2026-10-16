@@ -8,7 +8,7 @@ import vm from 'node:vm'
 const code = readFileSync(new URL('../dist/chat.js', import.meta.url), 'utf8')
 const window = {}
 vm.runInNewContext(code, { window, document: undefined, console })
-const { render, escapeHtml, groupSources } = window.GosidianChat._internal
+const { render, escapeHtml, groupSources, scopeLevels } = window.GosidianChat._internal
 
 test('escapes the markup of an answer', () => {
   assert.equal(escapeHtml(`<b a="1">'x'&</b>`), '&lt;b a=&quot;1&quot;&gt;&#39;x&#39;&amp;&lt;/b&gt;')
@@ -40,4 +40,18 @@ test('the sources by document', () => {
 test('lists and paragraphs', () => {
   assert.equal(render('Passi:\n- uno\n- due\n\n1. a\n2. b\nfine'),
     '<p>Passi:</p><ul><li>uno</li><li>due</li></ul><ol><li>a</li><li>b</li></ol><p>fine</p>')
+})
+
+test('a select per level of nested scopes, down the chosen ones', () => {
+  const tree = [
+    { name: 'cucina', label: 'Cucina', children: [{ name: 'primi', children: [{ name: 'pasta-fresca' }] }, { name: 'dolci' }] },
+    { name: 'attrezzi', label: 'Attrezzi' },
+  ]
+  const names = (lv) => JSON.parse(JSON.stringify(lv.map((l) => [l.options.map((o) => o.name), l.value])))
+  assert.deepEqual(names(scopeLevels(tree, [])), [[['cucina', 'attrezzi'], '']])
+  assert.deepEqual(names(scopeLevels(tree, ['cucina'])), [[['cucina', 'attrezzi'], 'cucina'], [['primi', 'dolci'], '']])
+  assert.deepEqual(names(scopeLevels(tree, ['cucina', 'primi', 'pasta-fresca'])).length, 3)
+  assert.deepEqual(names(scopeLevels(tree, ['attrezzi'])), [[['cucina', 'attrezzi'], 'attrezzi']])
+  // A name that is not among the options stops there.
+  assert.deepEqual(names(scopeLevels(tree, ['cucina', 'altro'])), [[['cucina', 'attrezzi'], 'cucina'], [['primi', 'dolci'], '']])
 })

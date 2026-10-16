@@ -144,9 +144,11 @@ type Bot struct {
 	Title   string  `json:"title"`
 	Welcome string  `json:"welcome"`
 	Scopes  []Scope `json:"scopes"`
-	Access  Access  `json:"access"`
-	Run     Run     `json:"run"`
-	Sources struct {
+	// ScopeLabels are what the chat calls each level of nested scopes.
+	ScopeLabels []string `json:"scope_labels"`
+	Access      Access   `json:"access"`
+	Run         Run      `json:"run"`
+	Sources     struct {
 		BaseURL     string `json:"base_url"`
 		GosidianURL string `json:"gosidian_url"`
 	} `json:"sources"`
@@ -154,12 +156,17 @@ type Bot struct {
 	GosidianURL string         `json:"gosidian_url"`
 }
 
-// Scope is a part of the archive the bot opens.
+// Scope is a part of the archive the bot opens; Children are the parts of
+// it the chat offers next (gosidian's scopes from folders).
 type Scope struct {
-	Name   string         `json:"name"`
-	Label  string         `json:"label"`
-	Filter map[string]any `json:"filter,omitempty"`
+	Name     string         `json:"name"`
+	Label    string         `json:"label"`
+	Filter   map[string]any `json:"filter,omitempty"`
+	Children []Scope        `json:"children,omitempty"`
 }
+
+// maxScopeDepth is how deep scopes nest: gosidian's folders.levels.
+const maxScopeDepth = 3
 
 // Access says who may chat: gosidian's users with the tokens it signs
 // (UsersSecret), the sites' keys from their origins, the users of a site
@@ -204,11 +211,24 @@ func (b *Bot) check() error {
 		return fmt.Errorf("run.url %q is not an http(s) address", b.Run.URL)
 	}
 	seen := map[string]bool{}
-	for _, sc := range b.Scopes {
-		if !botName.MatchString(sc.Name) || seen[sc.Name] {
-			return fmt.Errorf("scope %q: a name, once", sc.Name)
+	var walk func(scopes []Scope, depth int) error
+	walk = func(scopes []Scope, depth int) error {
+		for _, sc := range scopes {
+			switch {
+			case !botName.MatchString(sc.Name) || seen[sc.Name]:
+				return fmt.Errorf("scope %q: a name, once", sc.Name)
+			case depth > maxScopeDepth:
+				return fmt.Errorf("scope %q: scopes nest at most %d deep", sc.Name, maxScopeDepth)
+			}
+			seen[sc.Name] = true
+			if err := walk(sc.Children, depth+1); err != nil {
+				return err
+			}
 		}
-		seen[sc.Name] = true
+		return nil
+	}
+	if err := walk(b.Scopes, 1); err != nil {
+		return err
 	}
 	for _, k := range b.Access.Keys {
 		if k.Key == "" || len(k.Origins) == 0 {
@@ -232,12 +252,19 @@ func (b *Bot) limit(name string, def int) int {
 	return def
 }
 
-// scope finds a scope the bot opens.
+// scope finds a scope the bot opens, at any depth.
 func (b *Bot) scope(name string) (Scope, bool) {
-	for _, sc := range b.Scopes {
-		if sc.Name == name {
-			return sc, true
+	var find func(scopes []Scope) (Scope, bool)
+	find = func(scopes []Scope) (Scope, bool) {
+		for _, sc := range scopes {
+			if sc.Name == name {
+				return sc, true
+			}
+			if c, ok := find(sc.Children); ok {
+				return c, true
+			}
 		}
+		return Scope{}, false
 	}
-	return Scope{}, false
+	return find(b.Scopes)
 }

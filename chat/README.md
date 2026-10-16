@@ -24,7 +24,7 @@ gosidian need not be on the internet: only the plugin is.
 ```yaml
 services:
   gosidian-chat:
-    image: ghcr.io/daniele-chiappa/gosidian-chat:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-chat:0.2.0
     restart: unless-stopped
     read_only: true
     environment:
@@ -94,6 +94,12 @@ them), the answers with their sources and links, and a rating of each
 (👍, 👎, or from -10 to 10 with a comment). It keeps the conversation's id
 in the page's `sessionStorage`.
 
+A flat list of scopes shows as boxes, several of which may be chosen.
+Nested scopes, which gosidian makes of a folder's tree (the note's
+`folders`), show as a select per level, named by `scope_labels`: the
+folders under the bot's, then those of the one chosen; the deepest
+chosen is the scope of the message.
+
 `/embed/<bot>` is the bot's page, the chat on its own: gosidian shows it in
 the bot's note, with a token it signs for the reader in the fragment
 (`#token=…`), which no server sees. Only gosidian may frame it.
@@ -102,8 +108,8 @@ the bot's note, with a token it signs for the reader in the fragment
 
 | Request | |
 |---|---|
-| `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`), `max_message` |
-| `POST /api/bots/<bot>/messages` | `{message, session, scopes}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, `sources`, each with its `url`); `session` empty opens a conversation |
+| `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`, and `children` for nested ones), `scope_labels`, `max_message` |
+| `POST /api/bots/<bot>/messages` | `{message, session, scopes}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, `sources`, each with its `url`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level |
 | `POST /api/bots/<bot>/ratings` | `{session, turn, rating, comment}`: `turn` an answer of the conversation, `rating` from -10 to 10 |
 
 A request carries `Authorization: Bearer <token>`, or `X-Chat-Key` from

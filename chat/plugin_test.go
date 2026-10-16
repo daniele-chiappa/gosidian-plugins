@@ -345,12 +345,15 @@ func TestConfigureRefusals(t *testing.T) {
 	g := newFakeGosidian(t)
 	p := NewPlugin(testSettings(t), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	for name, extra := range map[string]map[string]any{
-		"bad name":         {"bot": "Docs"},
-		"no run":           {"run": map[string]any{}},
-		"users, no secret": {"access": map[string]any{"users": true}},
-		"nobody":           {"access": map[string]any{"users": false}},
-		"key, no origins":  {"access": map[string]any{"keys": []any{map[string]any{"name": "s", "key": "k"}}}},
-		"scope twice":      {"scopes": []any{map[string]any{"name": "a"}, map[string]any{"name": "a"}}},
+		"bad name":             {"bot": "Docs"},
+		"no run":               {"run": map[string]any{}},
+		"users, no secret":     {"access": map[string]any{"users": true}},
+		"nobody":               {"access": map[string]any{"users": false}},
+		"key, no origins":      {"access": map[string]any{"keys": []any{map[string]any{"name": "s", "key": "k"}}}},
+		"scope twice":          {"scopes": []any{map[string]any{"name": "a"}, map[string]any{"name": "a"}}},
+		"a child's name twice": {"scopes": []any{map[string]any{"name": "a", "children": []any{map[string]any{"name": "a"}}}}},
+		"four levels": {"scopes": []any{map[string]any{"name": "a", "children": []any{map[string]any{"name": "b", "children": []any{
+			map[string]any{"name": "c", "children": []any{map[string]any{"name": "d"}}}}}}}}},
 	} {
 		if res, text := callTool(t, p.configure, configureArgs(g, extra)); !res.IsError {
 			t.Errorf("%s: accepted: %s", name, text)
@@ -421,5 +424,43 @@ func TestManifest(t *testing.T) {
 	// gosidian refuses a tool whose input names project: it is in _meta.
 	if strings.Contains(string(b), `"project"`) {
 		t.Errorf("a tool takes project: %s", b)
+	}
+}
+
+func TestNestedScopes(t *testing.T) {
+	folder := func(f string) map[string]any {
+		return map[string]any{"meta": map[string]any{"folder": map[string]any{"in": []any{f}}}}
+	}
+	_, g, h := newTestPlugin(t, map[string]any{
+		"scopes": []any{map[string]any{"name": "cucina", "label": "Cucina", "filter": folder("p/docs/Cucina"), "children": []any{
+			map[string]any{"name": "cucina-primi", "label": "Primi", "filter": folder("p/docs/Cucina/Primi")},
+			map[string]any{"name": "cucina-dolci", "label": "Dolci", "filter": folder("p/docs/Cucina/Dolci")}}},
+			map[string]any{"name": "attrezzi", "label": "Attrezzi", "filter": folder("p/docs/Attrezzi")}},
+		"scope_labels": []any{"Area", "Modulo"},
+	})
+	auth := map[string]string{"Authorization": "Bearer " + userToken("mario", "docs", time.Now().Add(time.Hour))}
+	r := do(h, http.MethodGet, "/api/bots/docs", "", auth)
+	sc := r.body["scopes"].([]any)
+	if r.code != 200 || len(sc) != 2 || len(sc[0].(map[string]any)["children"].([]any)) != 2 || sc[1].(map[string]any)["children"] != nil ||
+		len(r.body["scope_labels"].([]any)) != 2 {
+		t.Fatalf("info: %d %v", r.code, r.body)
+	}
+	if _, ok := sc[0].(map[string]any)["children"].([]any)[0].(map[string]any)["filter"]; ok {
+		t.Error("a client sees a filter")
+	}
+	// A child chosen: its filter alone.
+	r = do(h, http.MethodPost, "/api/bots/docs/messages", `{"message":"x","scopes":["cucina-primi"]}`, auth)
+	if r.code != 200 {
+		t.Fatalf("message: %d %v", r.code, r.body)
+	}
+	in := g.last()
+	f := in["filters"].([]any)
+	if len(f) != 1 || f[0].(map[string]any)["meta"].(map[string]any)["folder"].(map[string]any)["in"].([]any)[0] != "p/docs/Cucina/Primi" {
+		t.Errorf("filters: %v", f)
+	}
+	// None chosen: the first level, which holds the rest.
+	_ = do(h, http.MethodPost, "/api/bots/docs/messages", `{"message":"y"}`, auth)
+	if s := g.last()["scopes"].([]any); len(s) != 2 || s[0] != "cucina" || s[1] != "attrezzi" {
+		t.Errorf("none chosen: %v", s)
 	}
 }

@@ -51,6 +51,7 @@ const configureSchema = `{"type": "object", "required": ["bot", "run", "access"]
   "bot": {"type": "string"}, "note": {"type": "string"},
   "title": {"type": "string"}, "welcome": {"type": "string"},
   "scopes": {"type": "array", "items": {"type": "object"}},
+  "scope_labels": {"type": "array", "items": {"type": "string"}},
   "access": {"type": "object"}, "run": {"type": "object"}, "sources": {"type": "object"},
   "conversations": {"type": "object"}, "limits": {"type": "object"}, "gosidian_url": {"type": "string"}}}`
 

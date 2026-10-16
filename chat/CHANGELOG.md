@@ -4,6 +4,20 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.2.0] — 2026-10-16
+
+The scopes of a bot may nest: gosidian 2.92 makes them of a folder's tree
+(a note's `folders`). A bot with a flat list of scopes works as before,
+with gosidian 2.91 too.
+
+### Added
+- **Nested scopes** (gosidian's scopes from folders): a scope may have
+  `children`, at most three levels deep, and `chat_configure` takes
+  `scope_labels`, what the chat calls each level. The API gives the tree
+  (without the filters) and `scope_labels`; a message names a scope at any
+  depth. The widget shows nested scopes as a select per level, a flat
+  list as boxes as before.
+
 ## [0.1.0] — 2026-10-16
 
 The first version: the bots of gosidian's notes `type: chat` (gosidian
