@@ -4,6 +4,38 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.3.0] — 2026-10-16
+
+Images in an answer, a person and a day. The button for a person and the
+day follow the bot's note in gosidian 2.93 (`handoff`, `dates`); with
+gosidian 2.92 the chat works as before, without them.
+
+### Added
+- **Images in an answer**: the node `images` (tool `chat_images`) takes
+  images by reference from a bot's pipeline, checks them (size, SHA-256,
+  png, jpeg, gif or webp by their bytes) and serves them at
+  `/api/bots/<bot>/images/<id>`, a random address, for as long as
+  `CHAT_IMAGES_TTL`; `CHAT_IMAGE_MAX_BYTES` and `CHAT_IMAGES_MAX_BYTES`
+  cap them. The widget shows them under the answer.
+- **A person** (gosidian 2.93, the note's `handoff`): a button in the
+  widget, also after an answer that found nothing, and
+  `POST /api/bots/<bot>/handoff` (`message`, `contact`), which starts the
+  bot's pipeline with `kind: handoff` and the conversation.
+- **A day** (the note's `dates`): a field in the widget, `as_of` in a
+  message, passed to the pipeline.
+
+### Changed
+- Scopes nest up to six levels (they did three), as gosidian's
+  `folders.levels`.
+- The widget folds the scopes and the day under a line that says what is
+  chosen, and takes the plugin's images from where its script came from
+  (a tunnel, a LAN address), not from `CHAT_PUBLIC_URL`.
+
+### Fixed
+- The widget sends a message without a `<form>`, on a click or Enter: in
+  a frame sandboxed without `allow-forms`, as gosidian's note of a bot
+  frames it, the browser dropped the submit and nothing was sent.
+
 ## [0.2.0] — 2026-10-16
 
 The scopes of a bot may nest: gosidian 2.92 makes them of a folder's tree

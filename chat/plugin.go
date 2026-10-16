@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,7 +28,10 @@ type Plugin struct {
 	client   *http.Client
 	sessions *Sessions
 	limits   *window
-	now      func() time.Time
+	images   *Images
+	// files fetches the files gosidian hands by reference: no redirect.
+	files *http.Client
+	now   func() time.Time
 
 	mu   sync.RWMutex
 	bots map[string]*Bot
@@ -37,6 +41,10 @@ type Plugin struct {
 func NewPlugin(set Settings, log *slog.Logger) *Plugin {
 	return &Plugin{set: set, log: log, client: &http.Client{Timeout: set.Wait + 15*time.Second},
 		sessions: NewSessions(set.SessionTTL, set.MaxSessions), limits: newWindow(),
+		images: NewImages(set.ImagesMaxBytes, set.ImagesTTL),
+		files: &http.Client{Timeout: time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error {
+			return errors.New("a file by reference does not redirect")
+		}},
 		now: func() time.Time { return time.Now().UTC() }, bots: map[string]*Bot{}}
 }
 
@@ -52,13 +60,15 @@ const configureSchema = `{"type": "object", "required": ["bot", "run", "access"]
   "title": {"type": "string"}, "welcome": {"type": "string"},
   "scopes": {"type": "array", "items": {"type": "object"}},
   "scope_labels": {"type": "array", "items": {"type": "string"}},
+  "handoff": {"type": ["object", "null"]}, "dates": {"type": "boolean"},
   "access": {"type": "object"}, "run": {"type": "object"}, "sources": {"type": "object"},
   "conversations": {"type": "object"}, "limits": {"type": "object"}, "gosidian_url": {"type": "string"}}}`
 
 const removeSchema = `{"type": "object", "required": ["bot"], "properties": {"bot": {"type": "string"}}}`
 
 // Manifest is what the plugin says of itself: two tools, which gosidian
-// calls itself for the notes type: chat (its docs/chat.md).
+// calls itself for the notes type: chat (its docs/chat.md), and the node
+// images, which a bot's pipeline uses for the screenshots of an answer.
 func (p *Plugin) Manifest() map[string]any {
 	return map[string]any{
 		"name": p.set.Name, "version": version, "gosidian": 1,
@@ -69,7 +79,13 @@ func (p *Plugin) Manifest() map[string]any {
 			map[string]any{"name": "chat_remove", "access": "write", "input_schema": json.RawMessage(removeSchema),
 				"description": "Takes a bot out, as gosidian does when its note goes"},
 		},
-		"permissions": map[string]any{"files": false, "network": []string{}},
+		"nodes": []any{
+			map[string]any{"name": "images", "tool": "chat_images", "files": []string{"images"}, "file_refs": true,
+				"description":   "Images of a bot's answer (png, jpeg, gif, webp): the plugin keeps them a while and gives the addresses the chat shows them at",
+				"input_schema":  json.RawMessage(imagesSchema),
+				"output_schema": json.RawMessage(imagesOutput)},
+		},
+		"permissions": map[string]any{"files": true, "network": []string{"gosidian"}},
 	}
 }
 
@@ -118,6 +134,7 @@ func (p *Plugin) remove(_ context.Context, req mcp.CallToolRequest) (*mcp.CallTo
 	delete(p.bots, name)
 	p.mu.Unlock()
 	p.sessions.DropBot(name)
+	p.images.Bot(name)
 	if had {
 		p.log.Info("bot removed", "bot", name)
 	}
@@ -132,6 +149,7 @@ func (p *Plugin) Handler() http.Handler {
 		func(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) { return p.result(p.Manifest()) })
 	ms.AddTool(mcp.NewToolWithRawSchema("chat_configure", "Configures a bot", json.RawMessage(configureSchema)), p.configure)
 	ms.AddTool(mcp.NewToolWithRawSchema("chat_remove", "Takes a bot out", json.RawMessage(removeSchema)), p.remove)
+	ms.AddTool(mcp.NewToolWithRawSchema("chat_images", "Images of a bot's answer", json.RawMessage(imagesSchema)), p.publishImages)
 	mcpH := server.NewStreamableHTTPServer(ms)
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

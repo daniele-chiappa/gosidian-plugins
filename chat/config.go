@@ -49,6 +49,13 @@ type Settings struct {
 	// gosidian reached at another address, through a tunnel or a second
 	// name.
 	FrameAncestors []string
+	// The images of the answers, in memory: one at most ImageMaxBytes
+	// (CHAT_IMAGE_MAX_BYTES), all together ImagesMaxBytes
+	// (CHAT_IMAGES_MAX_BYTES), each kept ImagesTTL (CHAT_IMAGES_TTL, by
+	// default as long as a conversation).
+	ImageMaxBytes  int64
+	ImagesMaxBytes int64
+	ImagesTTL      time.Duration
 }
 
 var pluginName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
@@ -79,6 +86,17 @@ func LoadSettings(getenv func(string) string) (Settings, error) {
 			return s, err
 		}
 	}
+	if s.ImagesTTL, err = envDuration(getenv, "CHAT_IMAGES_TTL", s.SessionTTL); err != nil {
+		return s, err
+	}
+	var one, all int
+	if one, err = envInt(getenv, "CHAT_IMAGE_MAX_BYTES", 10<<20); err != nil {
+		return s, err
+	}
+	if all, err = envInt(getenv, "CHAT_IMAGES_MAX_BYTES", 256<<20); err != nil {
+		return s, err
+	}
+	s.ImageMaxBytes, s.ImagesMaxBytes = int64(one), int64(all)
 	for _, n := range []struct {
 		name string
 		dst  *int
@@ -154,6 +172,17 @@ type Bot struct {
 	} `json:"sources"`
 	Limits      map[string]int `json:"limits"`
 	GosidianURL string         `json:"gosidian_url"`
+	// Handoff is the button that asks for a person; none, no button.
+	Handoff *Handoff `json:"handoff"`
+	// Dates: the chat offers a day, the answer as of then.
+	Dates bool `json:"dates"`
+}
+
+// Handoff is the chat's button that asks for a person: its label (the
+// widget's own when empty), and whether it asks how to answer.
+type Handoff struct {
+	Label   string `json:"label"`
+	Contact bool   `json:"contact"`
 }
 
 // Scope is a part of the archive the bot opens; Children are the parts of
@@ -166,7 +195,7 @@ type Scope struct {
 }
 
 // maxScopeDepth is how deep scopes nest: gosidian's folders.levels.
-const maxScopeDepth = 3
+const maxScopeDepth = 6
 
 // Access says who may chat: gosidian's users with the tokens it signs
 // (UsersSecret), the sites' keys from their origins, the users of a site

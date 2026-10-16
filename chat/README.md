@@ -24,7 +24,7 @@ gosidian need not be on the internet: only the plugin is.
 ```yaml
 services:
   gosidian-chat:
-    image: ghcr.io/daniele-chiappa/gosidian-chat:0.2.0
+    image: ghcr.io/daniele-chiappa/gosidian-chat:0.3.0
     restart: unless-stopped
     read_only: true
     environment:
@@ -66,6 +66,9 @@ reach it at (the bots' pipelines start there), and its secrets
 | `CHAT_IP_PER_MINUTE` | `60` | messages a minute from one address, all bots together |
 | `CHAT_TRUST_PROXY` | `false` | the client's address from `X-Forwarded-For` |
 | `CHAT_FRAME_ANCESTORS` | none | origins, comma-separated, besides gosidian's public address that may frame the bots' pages: gosidian reached at another address (a tunnel, a second name) |
+| `CHAT_IMAGE_MAX_BYTES` | `10485760` | the bytes of one image of an answer |
+| `CHAT_IMAGES_MAX_BYTES` | `268435456` | the images kept in memory, all together; the oldest go first |
+| `CHAT_IMAGES_TTL` | `CHAT_SESSION_TTL` | how long an image of an answer is served |
 
 The plugin keeps nothing on disk: the bots and their secrets live in
 memory, and gosidian hands them again every five minutes, so a restart
@@ -94,6 +97,12 @@ them), the answers with their sources and links, and a rating of each
 (👍, 👎, or from -10 to 10 with a comment). It keeps the conversation's id
 in the page's `sessionStorage`.
 
+With the note's `dates`, the chat offers a day: the answer is about the
+documents as they were then. With `handoff`, a button asks for a person,
+also after an answer that found nothing: a short form, with a contact
+when the note wants one, hands the conversation on. An answer's images
+show under it, each a link to the whole picture.
+
 A flat list of scopes shows as boxes, several of which may be chosen.
 Nested scopes, which gosidian makes of a folder's tree (the note's
 `folders`), show as a select per level, named by `scope_labels`: the
@@ -108,8 +117,10 @@ the bot's note, with a token it signs for the reader in the fragment
 
 | Request | |
 |---|---|
-| `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`, and `children` for nested ones), `scope_labels`, `max_message` |
-| `POST /api/bots/<bot>/messages` | `{message, session, scopes}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, `sources`, each with its `url`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level |
+| `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`, and `children` for nested ones), `scope_labels`, `max_message`, `handoff` (`label`, `contact`, or none), `dates` |
+| `POST /api/bots/<bot>/messages` | `{message, session, scopes, as_of}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, `sources`, each with its `url`, `images`, `non_so`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level; `as_of`, a day (YYYY-MM-DD), for a bot with `dates` |
+| `POST /api/bots/<bot>/handoff` | `{session, message, contact}` → `{session, answer}`: the bot's pipeline gets the conversation (`kind: handoff`) and hands it on; one a minute per conversation |
+| `GET /api/bots/<bot>/images/<id>` | an image of an answer, png, jpeg, gif or webp: its address is its key, without a token |
 | `POST /api/bots/<bot>/ratings` | `{session, turn, rating, comment}`: `turn` an answer of the conversation, `rating` from -10 to 10 |
 
 A request carries `Authorization: Bearer <token>`, or `X-Chat-Key` from
@@ -118,10 +129,27 @@ one of the key's origins, or nothing where the bot is open. Refusals are
 the pipeline failed, `504` when it did not answer in time.
 
 The pipeline gets the message as gosidian's `chat` trigger takes it
-(`kind`, `message`, `history`, `scopes`, `session`, `user`), plus `bot`,
-`note`, `filters` (the filters of the scopes chosen, in their order) and,
-with the note's `limits.max_tokens`, `max_tokens`. The history is the
-plugin's: a client cannot write the bot's turns.
+(`kind`, `message`, `history`, `scopes`, `session`, `user`, `as_of`), plus
+`bot`, `note`, `filters` (the filters of the scopes chosen, in their
+order) and, with the note's `limits.max_tokens`, `max_tokens`. The history
+is the plugin's: a client cannot write the bot's turns.
+
+## The node images
+
+A bot's pipeline shows images with its answer through the node
+`<plugin>.images` (`chat.images`): `bot` and `images`, vault paths of
+png, jpeg, gif or webp files, which gosidian hands by reference. The
+plugin fetches each one, checks its size, its SHA-256 and its type by its
+bytes, keeps it in memory and gives `images` (`url`, `name`, `mime`,
+`size`) and `skipped` (`name`, `error`). The pipeline puts the addresses
+in its answer, as `images` (`url`, `title`): the widget's page cannot
+read gosidian's files, the plugin's address it can.
+
+```yaml
+- id: show
+  use: chat.images
+  with: {bot: "{{ trigger.bot }}", images: ["documents/manual/Setup_img/menu.png"]}
+```
 
 ## Security
 

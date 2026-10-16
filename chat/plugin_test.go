@@ -56,6 +56,8 @@ func newFakeGosidian(t *testing.T) *fakeGosidian {
 		out := map[string]any{"run": run}
 		if !ok {
 			run["status"], run["error"] = "failed", "llm: down"
+		} else if body.Input["kind"] == "handoff" {
+			out["answer"] = map[string]any{"text": "Ho passato la conversazione a una persona."}
 		} else if body.Input["kind"] == "message" {
 			out["answer"] = map[string]any{"text": "eco: " + body.Input["message"].(string),
 				"sources": []any{map[string]any{"n": 1, "doc": "p/docs/Guida al forno.md"}}}
@@ -88,7 +90,8 @@ func testSettings(t *testing.T) Settings {
 		t.Fatal(err)
 	}
 	return Settings{Name: "chat", PublicURL: "https://chat.example.com", Token: "tok", Wait: 5 * time.Second, SessionTTL: time.Hour,
-		MaxSessions: 100, MaxHistory: 2, PerMinute: 10, PerSession: 100, MaxMessage: 200, IPPerMinute: 100, WidgetDir: dir}
+		MaxSessions: 100, MaxHistory: 2, PerMinute: 10, PerSession: 100, MaxMessage: 200, IPPerMinute: 100, WidgetDir: dir,
+		ImageMaxBytes: 1 << 20, ImagesMaxBytes: 4 << 20, ImagesTTL: time.Hour}
 }
 
 func configureArgs(g *fakeGosidian, extra map[string]any) map[string]any {
@@ -352,8 +355,7 @@ func TestConfigureRefusals(t *testing.T) {
 		"key, no origins":      {"access": map[string]any{"keys": []any{map[string]any{"name": "s", "key": "k"}}}},
 		"scope twice":          {"scopes": []any{map[string]any{"name": "a"}, map[string]any{"name": "a"}}},
 		"a child's name twice": {"scopes": []any{map[string]any{"name": "a", "children": []any{map[string]any{"name": "a"}}}}},
-		"four levels": {"scopes": []any{map[string]any{"name": "a", "children": []any{map[string]any{"name": "b", "children": []any{
-			map[string]any{"name": "c", "children": []any{map[string]any{"name": "d"}}}}}}}}},
+		"seven levels":         {"scopes": []any{map[string]any{"name": "a", "children": []any{map[string]any{"name": "b", "children": []any{map[string]any{"name": "c", "children": []any{map[string]any{"name": "d", "children": []any{map[string]any{"name": "e", "children": []any{map[string]any{"name": "f", "children": []any{map[string]any{"name": "g"}}}}}}}}}}}}}}},
 	} {
 		if res, text := callTool(t, p.configure, configureArgs(g, extra)); !res.IsError {
 			t.Errorf("%s: accepted: %s", name, text)

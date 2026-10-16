@@ -17,12 +17,15 @@ import (
 
 // The API of a bot, for the widget and for sites:
 //
-//	GET  /api/bots/<bot>           its title, welcome and scopes
-//	POST /api/bots/<bot>/messages  {message, session, scopes} → the answer
-//	POST /api/bots/<bot>/ratings   {session, turn, rating, comment}
+//	GET  /api/bots/<bot>              its title, welcome, scopes, handoff and dates
+//	POST /api/bots/<bot>/messages     {message, session, scopes, as_of} → the answer
+//	POST /api/bots/<bot>/ratings      {session, turn, rating, comment}
+//	POST /api/bots/<bot>/handoff      {session, message, contact} → the bot's reply
+//	GET  /api/bots/<bot>/images/<id>  an image of an answer
 //
 // A request carries a token (Authorization: Bearer), or a site's key
-// (X-Chat-Key) from one of its origins, or nothing where the bot is open.
+// (X-Chat-Key) from one of its origins, or nothing where the bot is open;
+// an image's address is its own key.
 
 const maxBody = 64 << 10
 
@@ -45,6 +48,10 @@ func (p *Plugin) serveAPI(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such bot (or gosidian did not configure it yet)")
 		return
 	}
+	if id, ok := strings.CutPrefix(action, "images/"); ok {
+		p.serveImage(w, r, b.Name, id)
+		return
+	}
 	cors(w, b, r.Header.Get("Origin"))
 	if r.Method == http.MethodOptions {
 		w.WriteHeader(http.StatusNoContent)
@@ -64,8 +71,10 @@ func (p *Plugin) serveAPI(w http.ResponseWriter, r *http.Request) {
 		p.message(w, r, b, caller, now)
 	case action == "ratings" && r.Method == http.MethodPost:
 		p.rating(w, r, b, caller, now)
+	case action == "handoff" && r.Method == http.MethodPost:
+		p.handoff(w, r, b, caller, now)
 	default:
-		writeError(w, http.StatusNotFound, "GET /api/bots/<bot>, POST /api/bots/<bot>/messages or /ratings")
+		writeError(w, http.StatusNotFound, "GET /api/bots/<bot>, POST /api/bots/<bot>/messages, /ratings or /handoff")
 	}
 }
 
@@ -74,8 +83,12 @@ func (p *Plugin) info(w http.ResponseWriter, b *Bot) {
 	if labels == nil {
 		labels = []string{}
 	}
+	var handoff any
+	if b.Handoff != nil {
+		handoff = map[string]any{"label": b.Handoff.Label, "contact": b.Handoff.Contact}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"bot": b.Name, "title": b.Title, "welcome": b.Welcome, "scopes": scopeInfo(b.Scopes),
-		"scope_labels": labels, "max_message": b.limit("max_message", p.set.MaxMessage)})
+		"scope_labels": labels, "max_message": b.limit("max_message", p.set.MaxMessage), "handoff": handoff, "dates": b.Dates})
 }
 
 // scopeInfo are scopes as a client sees them: names, labels and children,
@@ -117,6 +130,7 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 		Message string   `json:"message"`
 		Session string   `json:"session"`
 		Scopes  []string `json:"scopes"`
+		AsOf    string   `json:"as_of"`
 	}
 	if err := decodeBody(r, &in); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -131,6 +145,12 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 	case len([]rune(in.Message)) > max:
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("message: at most %d characters", max))
 		return
+	}
+	if in.AsOf != "" {
+		if _, err := time.Parse("2006-01-02", in.AsOf); err != nil || !b.Dates {
+			writeError(w, http.StatusBadRequest, "as_of: a day, YYYY-MM-DD, for a bot that answers at a date")
+			return
+		}
 	}
 	// The scopes chosen among those the bot opens, at any depth; none
 	// chosen, all of them (the first level, which holds the rest).
@@ -184,6 +204,9 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 		"session": se.ID, "user": c.User, "bot": b.Name, "note": b.Note}
 	if t := b.limit("max_tokens", 0); t > 0 {
 		input["max_tokens"] = t
+	}
+	if in.AsOf != "" {
+		input["as_of"] = in.AsOf
 	}
 	answer, run, err := p.start(r.Context(), b, input, p.set.Wait)
 	if err != nil {
@@ -281,6 +304,67 @@ func (p *Plugin) rating(w http.ResponseWriter, r *http.Request, b *Bot, c Caller
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// maxContact caps how a person may be answered: an address, a number.
+const maxContact = 200
+
+// handoff asks for a person: the bot's pipeline gets the conversation
+// (kind handoff), hands it on, and says what happens next.
+func (p *Plugin) handoff(w http.ResponseWriter, r *http.Request, b *Bot, c Caller, now time.Time) {
+	if b.Handoff == nil {
+		writeError(w, http.StatusNotFound, "this bot hands no conversation to a person")
+		return
+	}
+	var in struct {
+		Session string `json:"session"`
+		Message string `json:"message"`
+		Contact string `json:"contact"`
+	}
+	if err := decodeBody(r, &in); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	in.Message, in.Contact = strings.TrimSpace(in.Message), strings.TrimSpace(in.Contact)
+	switch {
+	case len([]rune(in.Message)) > b.limit("max_message", p.set.MaxMessage):
+		writeError(w, http.StatusBadRequest, "message: too long")
+		return
+	case len([]rune(in.Contact)) > maxContact:
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("contact: at most %d characters", maxContact))
+		return
+	case !b.Handoff.Contact:
+		in.Contact = ""
+	}
+	if !p.limits.allow("ip:"+c.IP, p.set.IPPerMinute, now) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "too many messages from this address: wait a minute")
+		return
+	}
+	se := p.sessions.Get(b.Name, in.Session, c.owner(), now)
+	se.mu.Lock()
+	defer se.mu.Unlock()
+	// One request a minute per conversation: a person, not a loop.
+	if !p.limits.allow("handoff:"+se.ID, 1, now) {
+		w.Header().Set("Retry-After", "60")
+		writeError(w, http.StatusTooManyRequests, "the request is already on its way: wait a minute")
+		return
+	}
+	history := append([]Turn{}, se.turns...)
+	input := map[string]any{"kind": "handoff", "message": in.Message, "contact": in.Contact, "history": history,
+		"session": se.ID, "user": c.User, "bot": b.Name, "note": b.Note}
+	answer, run, err := p.start(r.Context(), b, input, p.set.Wait)
+	if err != nil {
+		p.log.Warn("handoff", "bot", b.Name, "run", run, "err", err)
+		writeError(w, http.StatusBadGateway, "the request did not reach the bot")
+		return
+	}
+	ans, _ := answer.(map[string]any)
+	if ans == nil {
+		ans = map[string]any{"text": fmt.Sprint(answer)}
+	}
+	se.last.Store(now.UnixNano())
+	writeJSON(w, http.StatusOK, map[string]any{"session": se.ID, "answer": ans})
 }
 
 // statusError is a failure the client is told as it is, with its status.

@@ -8,7 +8,7 @@ import vm from 'node:vm'
 const code = readFileSync(new URL('../dist/chat.js', import.meta.url), 'utf8')
 const window = {}
 vm.runInNewContext(code, { window, document: undefined, console })
-const { render, escapeHtml, groupSources, scopeLevels } = window.GosidianChat._internal
+const { render, escapeHtml, groupSources, scopeLevels, figures } = window.GosidianChat._internal
 
 test('escapes the markup of an answer', () => {
   assert.equal(escapeHtml(`<b a="1">'x'&</b>`), '&lt;b a=&quot;1&quot;&gt;&#39;x&#39;&amp;&lt;/b&gt;')
@@ -54,4 +54,18 @@ test('a select per level of nested scopes, down the chosen ones', () => {
   assert.deepEqual(names(scopeLevels(tree, ['attrezzi'])), [[['cucina', 'attrezzi'], 'attrezzi']])
   // A name that is not among the options stops there.
   assert.deepEqual(names(scopeLevels(tree, ['cucina', 'altro'])), [[['cucina', 'attrezzi'], 'cucina'], [['primi', 'dolci'], '']])
+})
+
+test('the images of an answer: http(s) only, at most eight', () => {
+  const f = figures([{ url: 'https://chat.example.com/api/bots/b/images/1', title: 'Menu' }, { url: 'javascript:alert(1)' }, { title: 'none' },
+    ...Array.from({ length: 10 }, (_, i) => ({ url: `http://x/${i}` }))])
+  assert.equal(f.length, 8)
+  assert.deepEqual(JSON.parse(JSON.stringify(f[0])), { url: 'https://chat.example.com/api/bots/b/images/1', title: 'Menu' })
+  assert.ok(f.every((x) => x.url.startsWith('http')))
+})
+
+test('an image the plugin serves comes from where the widget came from', () => {
+  const f = figures([{ url: 'http://127.0.0.1:8095/api/bots/b/images/0a1f', title: 'x' }, { url: 'https://docs.example.com/a.png' }], 'http://192.0.2.5:8095')
+  assert.equal(f[0].url, 'http://192.0.2.5:8095/api/bots/b/images/0a1f')
+  assert.equal(f[1].url, 'https://docs.example.com/a.png')
 })
