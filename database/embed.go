@@ -32,12 +32,15 @@ func NewEmbedder(ep Endpoint, key string) *Embedder {
 // Usage is what the embeddings cost: tokens, and dollars (the endpoint's
 // figure when it gives one, else the preset's price).
 type Usage struct {
-	Tokens int     `json:"embedding_tokens"`
-	Cost   float64 `json:"cost"`
+	Tokens int `json:"embedding_tokens"`
+	// RerankTokens are those a reranker read: the question with each text.
+	RerankTokens int     `json:"rerank_tokens,omitempty"`
+	Cost         float64 `json:"cost"`
 }
 
 func (u *Usage) add(o Usage) {
 	u.Tokens += o.Tokens
+	u.RerankTokens += o.RerankTokens
 	u.Cost += o.Cost
 }
 
@@ -52,20 +55,30 @@ type Document struct {
 func (e *Embedder) Documents(ctx context.Context, m Model, docs []Document) ([][]float32, Usage, error) {
 	texts := make([]string, len(docs))
 	for i, d := range docs {
-		title := d.Title
-		if title == "" {
-			title = "none"
-		}
-		texts[i] = strings.NewReplacer("{text}", cut(d.Text, m.MaxChars), "{title}", title).Replace(m.DocumentTemplate)
+		texts[i] = d.fill(m.DocumentTemplate, m.MaxChars, "none")
 	}
 	return e.embed(ctx, m, texts)
 }
 
-// Queries embeds questions with the model's prefix.
+// fill is the document as a template makes it, its text cut to maxChars
+// (0: whole), noTitle for a title it has not.
+func (d Document) fill(template string, maxChars int, noTitle string) string {
+	title := d.Title
+	if title == "" {
+		title = noTitle
+	}
+	return strings.NewReplacer("{text}", cut(d.Text, maxChars), "{title}", title).Replace(template)
+}
+
+// Queries embeds questions with the model's prefix, asking query_id when
+// the preset gives one.
 func (e *Embedder) Queries(ctx context.Context, m Model, qs []string) ([][]float32, Usage, error) {
 	texts := make([]string, len(qs))
 	for i, q := range qs {
 		texts[i] = m.QueryPrefix + cut(q, m.MaxChars)
+	}
+	if m.QueryID != "" {
+		m.ID = m.QueryID
 	}
 	return e.embed(ctx, m, texts)
 }
@@ -122,7 +135,7 @@ func (e *Embedder) request(ctx context.Context, m Model, batch []string) ([][]fl
 		return nil, Usage{}, err
 	}
 	var resp embeddingsResponse
-	if err := e.post(ctx, raw, &resp); err != nil {
+	if err := postJSON(ctx, e.hc, strings.TrimRight(e.ep.BaseURL, "/")+"/embeddings", e.key, raw, &resp); err != nil {
 		return nil, Usage{}, fmt.Errorf("embeddings with %s: %w", m.Name, err)
 	}
 	if len(resp.Data) != len(batch) {
@@ -155,10 +168,10 @@ func (e *Embedder) request(ctx context.Context, m Model, batch []string) ([][]fl
 	return vecs, u, nil
 }
 
-// post sends a request, trying again a busy or failing endpoint (429,
-// 5xx) three times, with its Retry-After when it gives one.
-func (e *Embedder) post(ctx context.Context, raw []byte, out any) error {
-	url := strings.TrimRight(e.ep.BaseURL, "/") + "/embeddings"
+// postJSON sends a request to an endpoint's url, with its key, trying
+// again a busy or failing endpoint (429, 5xx) three times, with its
+// Retry-After when it gives one.
+func postJSON(ctx context.Context, hc *http.Client, url, key string, raw []byte, out any) error {
 	wait := time.Second
 	for attempt := 1; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
@@ -166,10 +179,14 @@ func (e *Embedder) post(ctx context.Context, raw []byte, out any) error {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if e.key != "" {
-			req.Header.Set("Authorization", "Bearer "+e.key)
+		if key != "" {
+			req.Header.Set("Authorization", "Bearer "+key)
 		}
-		resp, err := e.hc.Do(req)
+		// Embeddings and scores can be asked again: Go then sends the
+		// request again on a new connection when the endpoint closes a
+		// kept one as it comes in. Empty, the header is not sent.
+		req.Header["X-Idempotency-Key"] = nil
+		resp, err := hc.Do(req)
 		if err != nil {
 			return err
 		}

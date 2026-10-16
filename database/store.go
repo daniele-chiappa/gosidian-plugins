@@ -53,10 +53,12 @@ type SearchOptions struct {
 }
 
 // Hit is a chunk found for a question: its score is the cosine
-// similarity, 1 for the same direction.
+// similarity, 1 for the same direction; RerankScore, with a rerank, the
+// reranker's.
 type Hit struct {
 	Chunk
-	Score float64 `json:"score"`
+	Score       float64  `json:"score"`
+	RerankScore *float64 `json:"rerank_score,omitempty"`
 }
 
 // Filter narrows a search, a list, an update or a delete: every field it

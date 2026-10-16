@@ -77,6 +77,10 @@ func (s *qdrantStore) do(ctx context.Context, key, method, path string, body, ou
 	if key != "" {
 		req.Header.Set("api-key", key)
 	}
+	// Every call of the plugin can be repeated (a point's id comes from its
+	// chunk's): Go then sends it again on a new connection when Qdrant
+	// closes a kept one as it comes in. Empty, the header is not sent.
+	req.Header["X-Idempotency-Key"] = nil
 	resp, err := s.hc.Do(req)
 	if err != nil {
 		return err

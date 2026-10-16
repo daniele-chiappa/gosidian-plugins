@@ -17,20 +17,22 @@ import (
 )
 
 // Config is an archive's preset: the endpoint that computes the
-// embeddings and its models, the store that keeps the vectors, the
-// limits of a call. The secrets are not in it: they come from the
-// environment (Env).
+// embeddings and its models, the rerankers that read a search's results
+// again, the store that keeps the vectors, the limits of a call. The
+// secrets are not in it: they come from the environment (Env).
 type Config struct {
-	Description  string      `yaml:"description"`
-	Endpoint     Endpoint    `yaml:"endpoint"`
-	Models       []Model     `yaml:"models"`
-	DefaultModel string      `yaml:"default_model"`
-	Store        StoreConfig `yaml:"store"`
-	Limits       Limits      `yaml:"limits"`
+	Description     string      `yaml:"description"`
+	Endpoint        Endpoint    `yaml:"endpoint"`
+	Models          []Model     `yaml:"models"`
+	DefaultModel    string      `yaml:"default_model"`
+	Rerankers       []Reranker  `yaml:"rerankers"`
+	DefaultReranker string      `yaml:"default_reranker"`
+	Store           StoreConfig `yaml:"store"`
+	Limits          Limits      `yaml:"limits"`
 }
 
-// Endpoint is an OpenAI-compatible API with /embeddings: Ollama, a
-// llama-server, OpenRouter.
+// Endpoint is an OpenAI-compatible API with /embeddings (Ollama, a
+// llama-server, OpenRouter), or, a reranker's, one with /rerank.
 type Endpoint struct {
 	BaseURL string `yaml:"base_url"`
 	// APIKeyEnv names the variable with the endpoint's key; empty for none.
@@ -44,6 +46,11 @@ type Endpoint struct {
 // Model is an embedding model of the endpoint.
 type Model struct {
 	ID string `yaml:"id"`
+	// QueryID is the model asked for the questions, when not ID: the same
+	// weights served with a shorter context (Ollama's num_ctx), which take
+	// less memory and so stay loaded beside the model of an answer. It
+	// must give the same vectors as ID; documents always go to ID.
+	QueryID string `yaml:"query_id"`
 	// Name is what a collection and a call name it by; default ID.
 	Name string `yaml:"name"`
 	// Dims is the size of the vectors the model gives.
@@ -63,6 +70,39 @@ type Model struct {
 	Batch    int `yaml:"batch"`
 	MaxChars int `yaml:"max_chars"`
 	// Cost is in dollars per million input tokens.
+	Cost struct {
+		Input float64 `yaml:"input"`
+	} `yaml:"cost"`
+	Body map[string]any `yaml:"body"`
+}
+
+// Reranker is a model that reads a question together with each text and
+// scores how well the text answers it (a cross-encoder), more slowly and
+// better than the cosine of two vectors made apart. Its endpoint is an API
+// with POST /rerank (model, query, documents → results of index and
+// relevance_score): llama.cpp's server with --reranking, vLLM, Jina,
+// Cohere.
+type Reranker struct {
+	ID string `yaml:"id"`
+	// Name is what a call names it by; default ID.
+	Name string `yaml:"name"`
+	// Endpoint serves it; none, the preset's endpoint.
+	Endpoint Endpoint `yaml:"endpoint"`
+	// DocumentTemplate makes the text a document is read as, with {text}
+	// and {title} (default "{text}").
+	DocumentTemplate string `yaml:"document_template"`
+	// MaxChars cuts a text longer than that (0: the endpoint decides): a
+	// server reads the question and a text in one pass of its context, and
+	// a character of a table or a code can be a token, so under the
+	// context in tokens less the question's.
+	MaxChars int `yaml:"max_chars"`
+	// Batch is the texts of one request (default 32).
+	Batch int `yaml:"batch"`
+	// Sigmoid maps the scores to 0..1, for an endpoint that gives the
+	// model's logits (llama.cpp's server): a threshold then reads as with
+	// an endpoint that maps them itself (vLLM, Cohere).
+	Sigmoid bool `yaml:"sigmoid"`
+	// Cost is in dollars per million tokens read.
 	Cost struct {
 		Input float64 `yaml:"input"`
 	} `yaml:"cost"`
@@ -155,6 +195,9 @@ type Limits struct {
 	// so the two go up together.
 	MaxGraph  int `yaml:"max_graph"`
 	MaxGraphK int `yaml:"max_graph_k"`
+	// MaxRerank caps the texts one rerank reads, and the candidates of a
+	// search with rerank, per question.
+	MaxRerank int `yaml:"max_rerank"`
 }
 
 // Duration is a time.Duration written as "30s".
@@ -218,6 +261,8 @@ func (c *Config) check() error {
 			return fmt.Errorf("model %q: dims is the size of its vectors, 1 to 16000", m.Name)
 		case m.Dimensions < 0 || m.Dimensions > m.Dims:
 			return fmt.Errorf("model %q: dimensions cuts the vectors, 1 to dims (%d)", m.Name, m.Dims)
+		case m.QueryID != "" && !modelName.MatchString(m.QueryID):
+			return fmt.Errorf("model %q: query_id, a model of letters, digits and . _ : / -", m.Name)
 		}
 		seen[m.Name] = true
 		if m.DocumentTemplate == "" {
@@ -235,6 +280,9 @@ func (c *Config) check() error {
 	}
 	if _, ok := c.Model(c.DefaultModel); !ok {
 		return fmt.Errorf("default_model %q is no model of the preset", c.DefaultModel)
+	}
+	if err := c.checkRerankers(); err != nil {
+		return err
 	}
 	switch {
 	case c.Store.EF < 0 || c.Store.EF > 1000:
@@ -302,6 +350,9 @@ func (c *Config) check() error {
 	if c.Limits.MaxGraphK <= 0 {
 		c.Limits.MaxGraphK = 20
 	}
+	if c.Limits.MaxRerank <= 0 {
+		c.Limits.MaxRerank = 200
+	}
 	switch {
 	case c.Limits.MaxResult == 0:
 		c.Limits.MaxResult = 1000 << 10
@@ -314,6 +365,64 @@ func (c *Config) check() error {
 	return nil
 }
 
+func (c *Config) checkRerankers() error {
+	seen := map[string]bool{}
+	for i := range c.Rerankers {
+		r := &c.Rerankers[i]
+		if r.Name == "" {
+			r.Name = r.ID
+		}
+		switch {
+		case r.ID == "":
+			return fmt.Errorf("reranker %d has no id", i+1)
+		case !modelName.MatchString(r.Name):
+			return fmt.Errorf("reranker %q: a name of letters, digits and . _ : / -", r.Name)
+		case seen[r.Name]:
+			return fmt.Errorf("reranker %q twice", r.Name)
+		case r.MaxChars < 0:
+			return fmt.Errorf("reranker %q: max_chars, 0 or more", r.Name)
+		}
+		seen[r.Name] = true
+		if r.Endpoint.BaseURL == "" {
+			r.Endpoint = c.Endpoint
+		}
+		if u, err := url.Parse(r.Endpoint.BaseURL); err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return fmt.Errorf("reranker %q: endpoint.base_url %q is not an http(s) address", r.Name, r.Endpoint.BaseURL)
+		}
+		if r.Endpoint.Timeout <= 0 {
+			r.Endpoint.Timeout = Duration(2 * time.Minute)
+		}
+		if r.DocumentTemplate == "" {
+			r.DocumentTemplate = "{text}"
+		}
+		if !strings.Contains(r.DocumentTemplate, "{text}") {
+			return fmt.Errorf("reranker %q: document_template has no {text}", r.Name)
+		}
+		if r.Batch <= 0 {
+			r.Batch = 32
+		}
+	}
+	switch {
+	case c.DefaultReranker == "" && len(c.Rerankers) > 0:
+		c.DefaultReranker = c.Rerankers[0].Name
+	case c.DefaultReranker != "":
+		if _, ok := c.Reranker(c.DefaultReranker); !ok {
+			return fmt.Errorf("default_reranker %q is no reranker of the preset", c.DefaultReranker)
+		}
+	}
+	return nil
+}
+
+// Reranker finds a reranker by name.
+func (c *Config) Reranker(name string) (Reranker, bool) {
+	for _, r := range c.Rerankers {
+		if r.Name == name {
+			return r, true
+		}
+	}
+	return Reranker{}, false
+}
+
 // Model finds a model by name.
 func (c *Config) Model(name string) (Model, bool) {
 	for _, m := range c.Models {
@@ -324,11 +433,18 @@ func (c *Config) Model(name string) (Model, bool) {
 	return Model{}, false
 }
 
-// Hosts are the hosts the plugin calls: the endpoint's and the store's.
+// Hosts are the hosts the plugin calls: the endpoint's, the store's and
+// the rerankers'.
 func (c *Config) Hosts() []string {
 	var out []string
-	for _, raw := range []string{c.Endpoint.BaseURL, c.Store.URL} {
-		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+	seen := map[string]bool{}
+	raws := []string{c.Endpoint.BaseURL, c.Store.URL}
+	for _, r := range c.Rerankers {
+		raws = append(raws, r.Endpoint.BaseURL)
+	}
+	for _, raw := range raws {
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" && !seen[u.Hostname()] {
+			seen[u.Hostname()] = true
 			out = append(out, u.Hostname())
 		}
 	}

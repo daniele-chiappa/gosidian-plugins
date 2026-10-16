@@ -70,7 +70,7 @@ func testPlugin(t *testing.T, b backend, query string) (*Plugin, *fakeEndpoint) 
 		b.env.QueryTimeout = 5e9
 	}
 	s, q := openBackend(t, b)
-	return NewPlugin(cfg, b.env, s, NewEmbedder(cfg.Endpoint, ""), q, slog.New(slog.NewTextHandler(io.Discard, nil))), fake
+	return NewPlugin(cfg, b.env, s, NewEmbedder(cfg.Endpoint, ""), NewRanker(cfg.Rerankers, func(string) string { return "" }), q, slog.New(slog.NewTextHandler(io.Discard, nil))), fake
 }
 
 // TestManifest checks the manifest against gosidian's rules for nodes and
@@ -125,9 +125,20 @@ func TestManifest(t *testing.T) {
 	}
 	p.query = nil
 	for _, o := range p.operations() {
-		if o.name == "query" {
-			t.Error("the query tool is offered with DB_QUERY off")
+		if o.name == "query" || o.name == "rerank" {
+			t.Errorf("the %s tool is offered without its setting", o.name)
 		}
+	}
+	// With a reranker, rerank is a tool and search takes rerank; its host
+	// is called.
+	p.cfg.Rerankers = []Reranker{{ID: "bge", Endpoint: Endpoint{BaseURL: "http://ai:8081/v1"}}}
+	if err := p.cfg.checkRerankers(); err != nil {
+		t.Fatal(err)
+	}
+	b, _ = json.Marshal(p.Manifest())
+	if !strings.Contains(string(b), `"access":"read","description":"Order texts`) || !strings.Contains(string(b), `"rerank":{"description":"Order the candidates again with a reranker: true for the preset's (bge)`) ||
+		!strings.Contains(string(b), `"network":["ollama","db","ai"]`) {
+		t.Errorf("manifest with a reranker: %s", b)
 	}
 }
 
@@ -627,6 +638,108 @@ func TestPlugin_Fingerprint(t *testing.T) {
 			delete(page[0].(map[string]any), "fingerprint")
 			call(t, p, "upsert", proj, map[string]any{"collection": "altra", "chunks": page[:1]}, "")
 			upsert("altra", 1)
+		})
+	}
+}
+
+// TestPlugin_Rerank: a search with rerank reads the cosine's candidates
+// again and keeps the reranker's first k; rerank orders texts, objects and
+// stored chunks.
+func TestPlugin_Rerank(t *testing.T) {
+	for _, b := range backends(t) {
+		t.Run(b.name, func(t *testing.T) {
+			p, _ := testPlugin(t, b, QueryOff)
+			proj := uniq("rag")
+			t.Cleanup(func() { _ = p.store.Drop(context.Background(), proj, "procedure") })
+			chunks := []any{}
+			for _, ch := range procedures {
+				chunks = append(chunks, map[string]any{"id": ch.ID, "text": ch.Text, "title": ch.Title, "doc": ch.Doc, "meta": ch.Meta})
+			}
+			call(t, p, "upsert", proj, map[string]any{"collection": "procedure", "chunks": chunks}, "")
+			call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": "x", "rerank": true}, "no rerankers")
+			f := newFakeReranker(t, map[string]float64{"vaso": 4, "foglie": 1})
+			withReranker(t, p, f)
+
+			// The cosine puts the leaves first, the reranker the pot.
+			const q = "foglie ingialliscono annaffiare"
+			out := call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "k": 1}, "")
+			if h := out["hits"].([]any); h[0].(map[string]any)["id"] != "orto-1" || h[0].(map[string]any)["rerank_score"] != nil {
+				t.Fatalf("without rerank: %v", out)
+			}
+			out = call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "k": 2, "rerank": true, "candidates": 4}, "")
+			hits := out["hits"].([]any)
+			first := hits[0].(map[string]any)
+			if len(hits) != 2 || first["id"] != "orto-0" || hits[1].(map[string]any)["id"] != "orto-1" || first["text"] == "" {
+				t.Fatalf("with rerank: %v", out)
+			}
+			if s := first["rerank_score"].(float64); math.Abs(s-1/(1+math.Exp(-4))) > 1e-9 || first["score"] == nil {
+				t.Errorf("scores: %v", first)
+			}
+			if out["reranker"] != "rr" || out["candidates"] != float64(4) || out["ms"].(map[string]any)["rerank"] == nil {
+				t.Errorf("reranker, candidates, ms: %v", out)
+			}
+			if u := out["usage"].(map[string]any); u["rerank_tokens"].(float64) <= 0 || u["embedding_tokens"].(float64) <= 0 {
+				t.Errorf("usage: %v", u)
+			}
+			docs := f.documents()
+			if len(docs) != 4 || !strings.HasPrefix(docs[0], "Basilico: ") {
+				t.Errorf("the reranker read %q", docs)
+			}
+			// Without text in the result, the reranker reads it all the same.
+			out = call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "k": 1, "rerank": "rr", "candidates": 4, "with_text": false}, "")
+			if h := out["hits"].([]any)[0].(map[string]any); h["id"] != "orto-0" || h["text"] != nil {
+				t.Errorf("without text: %v", h)
+			}
+			if d := f.documents(); strings.HasSuffix(d[len(d)-1], ": ") {
+				t.Errorf("the reranker read no text: %q", d)
+			}
+			out = call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "k": 2, "rerank": true, "candidates": 4, "min_rerank_score": 0.99}, "")
+			if len(out["hits"].([]any)) != 0 {
+				t.Errorf("min_rerank_score kept %v", out["hits"])
+			}
+			out = call(t, p, "search", proj, map[string]any{"collection": "procedure", "queries": []any{q, "pane farina"}, "k": 1, "rerank": true}, "")
+			res := out["results"].([]any)
+			if res[0].([]any)[0].(map[string]any)["id"] != "orto-0" || len(res[1].([]any)) != 1 || out["candidates"] != float64(50) {
+				t.Errorf("queries: %v", out)
+			}
+			call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "k": 5, "rerank": true, "candidates": 3}, "candidates: k (5) to 200")
+			call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "rerank": true, "candidates": 201}, "candidates")
+			call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "rerank": "nope"}, "no reranker of the preset")
+			call(t, p, "search", proj, map[string]any{"collection": "procedure", "query": q, "rerank": 3}, "rerank: true")
+
+			out = call(t, p, "rerank", proj, map[string]any{"query": q, "texts": []any{"un vaso", "niente", "foglie nel vaso"}, "k": 2}, "")
+			hits = out["hits"].([]any)
+			if len(hits) != 2 || hits[0].(map[string]any)["index"] != float64(2) || hits[1].(map[string]any)["index"] != float64(0) || out["reranker"] != "rr" {
+				t.Errorf("texts: %v", out)
+			}
+			out = call(t, p, "rerank", proj, map[string]any{"query": q, "items": []any{
+				map[string]any{"id": "a", "text": "niente", "source": "bm25"},
+				map[string]any{"id": "b", "text": "foglie", "title": "vaso"}}, "min_score": 0.5}, "")
+			if hits = out["hits"].([]any); len(hits) != 1 || hits[0].(map[string]any)["id"] != "b" || hits[0].(map[string]any)["rerank_score"] == nil {
+				t.Errorf("items: %v", out)
+			}
+			out = call(t, p, "rerank", proj, map[string]any{"query": q, "items": []any{map[string]any{"id": "a", "text": "niente", "source": "bm25"}}}, "")
+			if h := out["hits"].([]any)[0].(map[string]any); h["source"] != "bm25" {
+				t.Errorf("an item comes back whole: %v", h)
+			}
+			out = call(t, p, "rerank", proj, map[string]any{"query": q, "collection": "procedure", "ids": []any{"pane-0", "orto-0", "orto-1"}}, "")
+			if hits = out["hits"].([]any); len(hits) != 3 || hits[0].(map[string]any)["id"] != "orto-0" || hits[0].(map[string]any)["doc"] != "guide/basilico.md" {
+				t.Errorf("ids: %v", out)
+			}
+			call(t, p, "rerank", proj, map[string]any{"query": q}, "one of texts")
+			call(t, p, "rerank", proj, map[string]any{"query": q, "texts": []any{"a"}, "items": []any{map[string]any{"text": "b"}}}, "one of texts")
+			call(t, p, "rerank", proj, map[string]any{"query": q, "items": []any{map[string]any{"id": "a"}}}, "items[0]: no text")
+			call(t, p, "rerank", proj, map[string]any{"query": " ", "texts": []any{"a"}}, "query")
+			call(t, p, "rerank", proj, map[string]any{"query": q, "texts": []any{"a"}, "model": "nope"}, "no reranker")
+			many := make([]any, 201)
+			for i := range many {
+				many[i] = "x"
+			}
+			call(t, p, "rerank", proj, map[string]any{"query": q, "texts": many}, "at most 200")
+			out = call(t, p, "collections", proj, map[string]any{}, "")
+			if out["rerankers"] != "rr" || out["default_reranker"] != "rr" {
+				t.Errorf("collections: %v", out)
+			}
 		})
 	}
 }

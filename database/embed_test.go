@@ -57,6 +57,19 @@ func TestEmbedder(t *testing.T) {
 	if fake.last()["dimensions"] != float64(12) || fake.last()["input"].([]any)[0] != "query: x" {
 		t.Errorf("query: %v", fake.last())
 	}
+	// query_id asks another id for the questions only, and leaves the
+	// documents' fingerprint as it was.
+	fp := m.fingerprint(cfg.Endpoint)
+	m.QueryID = "bag-16-short"
+	if _, _, err := e.Queries(context.Background(), m, []string{"x"}); err != nil || fake.last()["model"] != "bag-16-short" {
+		t.Errorf("query with query_id: %v %v", fake.last(), err)
+	}
+	if _, _, err := e.Documents(context.Background(), m, []Document{{Text: "y"}}); err != nil || fake.last()["model"] != "bag-16" {
+		t.Errorf("document with query_id: %v %v", fake.last(), err)
+	}
+	if m.fingerprint(cfg.Endpoint) != fp {
+		t.Error("query_id changed the fingerprint")
+	}
 }
 
 func TestEmbedder_RetriesAndRefusals(t *testing.T) {
@@ -121,12 +134,31 @@ func TestConfig(t *testing.T) {
 		"meta_index key": func(c *Config) {
 			c.Store = StoreConfig{Kind: "qdrant", URL: "http://q:6333", MetaIndex: map[string]string{"a.b": "keyword"}}
 		},
+		"reranker without id":    func(c *Config) { c.Rerankers = []Reranker{{Name: "r"}} },
+		"reranker twice":         func(c *Config) { c.Rerankers = []Reranker{{ID: "r"}, {ID: "r"}} },
+		"reranker template":      func(c *Config) { c.Rerankers = []Reranker{{ID: "r", DocumentTemplate: "{title}"}} },
+		"reranker base_url":      func(c *Config) { c.Rerankers = []Reranker{{ID: "r", Endpoint: Endpoint{BaseURL: "ai:8081"}}} },
+		"reranker max_chars":     func(c *Config) { c.Rerankers = []Reranker{{ID: "r", MaxChars: -1}} },
+		"default_reranker":       func(c *Config) { c.Rerankers = []Reranker{{ID: "r"}}; c.DefaultReranker = "s" },
+		"default_reranker, none": func(c *Config) { c.DefaultReranker = "s" },
 	} {
 		c := good()
 		change(c)
 		if err := c.check(); err == nil {
 			t.Errorf("%s: accepted", why)
 		}
+	}
+	// A reranker without an endpoint is served by the preset's.
+	c = good()
+	c.Rerankers = []Reranker{{ID: "bge-reranker-v2-m3", Endpoint: Endpoint{}}, {ID: "jina", Name: "j", Endpoint: Endpoint{BaseURL: "https://api.jina.ai/v1", APIKeyEnv: "JINA_KEY"}}}
+	if err := c.check(); err != nil || c.DefaultReranker != "bge-reranker-v2-m3" || c.Limits.MaxRerank != 200 {
+		t.Fatalf("rerankers: %+v %v", c, err)
+	}
+	if r, _ := c.Reranker("bge-reranker-v2-m3"); r.Endpoint.BaseURL != "http://ollama:11434/v1" || r.Batch != 32 || r.DocumentTemplate != "{text}" || r.Endpoint.Timeout <= 0 {
+		t.Errorf("a reranker's defaults: %+v", r)
+	}
+	if h := strings.Join(c.Hosts(), ","); h != "ollama,db,api.jina.ai" {
+		t.Errorf("hosts: %s", h)
 	}
 	c = good()
 	c.Store = StoreConfig{Kind: "qdrant", URL: "http://q:6333", EF: 128, MetaIndex: map[string]string{"status": "keyword", "dal": "integer", "al": "integer"}}

@@ -4,6 +4,41 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.0] — 2026-10-16
+
+Rerankers: a search reads its first candidates again with a model that
+scores how well each answers the question.
+
+### Added
+- **`rerankers`** in the preset, with `default_reranker`: each an endpoint
+  with `POST /rerank` (llama.cpp's server with `--reranking`, vLLM, Jina,
+  Cohere; none, the preset's endpoint), `document_template`, `max_chars`,
+  `batch`, `sigmoid` (for an endpoint that gives logits) and `cost`.
+- **`search` with `rerank`** (`true` or a reranker's name): the reranker
+  reads the cosine's first `candidates` per question (50 by default) and
+  keeps its first `k`, each hit with `rerank_score` beside its cosine;
+  `min_rerank_score` leaves out the weaker. `ms.rerank` and
+  `usage.rerank_tokens` say what it cost.
+- **`rerank`** (node and tool, read): orders `texts`, `items` (objects with
+  a text, given back whole) or the chunks of a collection by `ids` for a
+  question. Offered only with rerankers in the preset.
+- `limits.max_rerank` (200): the texts of one `rerank`, and the candidates
+  per question of a search with `rerank`.
+- `query_id` on a model of the preset: the questions go to another id of
+  the same weights, with a shorter context, which stays loaded beside the
+  model of an answer. The documents and their fingerprint keep `id`.
+
+### Changed
+- `permissions.network` of the manifest names each host once (the
+  endpoint, the store and the rerankers'), as gosidian shows it.
+
+### Fixed
+- A call to Qdrant, or to an endpoint, on a kept connection the server
+  closed as it came in failed with `EOF`: a search with a reranker, whose
+  pauses outlast Qdrant's keep-alive, met it in one batch out of twenty.
+  Every call of the plugin can be repeated, and Go now sends it again on a
+  new connection.
+
 ## [0.4.0] — 2026-10-15
 
 ### Added

@@ -73,7 +73,12 @@ func run(port string, log *slog.Logger) error {
 			log.Warn("the endpoint's key is empty", "env", cfg.Endpoint.APIKeyEnv)
 		}
 	}
-	p := NewPlugin(cfg, e, store, NewEmbedder(cfg.Endpoint, key), query, log)
+	for _, r := range cfg.Rerankers {
+		if r.Endpoint.APIKeyEnv != "" && os.Getenv(r.Endpoint.APIKeyEnv) == "" {
+			log.Warn("a reranker's key is empty", "reranker", r.Name, "env", r.Endpoint.APIKeyEnv)
+		}
+	}
+	p := NewPlugin(cfg, e, store, NewEmbedder(cfg.Endpoint, key), NewRanker(cfg.Rerankers, os.Getenv), query, log)
 	srv := &http.Server{Addr: ":" + port, Handler: p.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
@@ -85,8 +90,12 @@ func run(port string, log *slog.Logger) error {
 	for i, m := range cfg.Models {
 		models[i] = fmt.Sprintf("%s (%d)", m.Name, m.Size())
 	}
+	rerankers := make([]string, len(cfg.Rerankers))
+	for i, r := range cfg.Rerankers {
+		rerankers[i] = r.Name + " " + r.Endpoint.BaseURL
+	}
 	log.Info("gosidian-database", "version", version, "name", e.Name, "port", port, "store", cfg.Store.Kind,
-		"endpoint", cfg.Endpoint.BaseURL, "models", models, "query", e.Query, "preset", cfgPath)
+		"endpoint", cfg.Endpoint.BaseURL, "models", models, "rerankers", rerankers, "query", e.Query, "preset", cfgPath)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return err
 	}

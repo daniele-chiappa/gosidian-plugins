@@ -14,15 +14,17 @@ their `level`.
 
 One container is one archive: one store, and a **preset** of the endpoint
 that computes the embeddings (any OpenAI-compatible `/embeddings`: Ollama,
-llama-server, OpenRouter…) with its models. Register several containers to
-compare stores or models.
+llama-server, OpenRouter…) with its models, and of the
+[rerankers](#reranking) that read a search's first results again. Register
+several containers to compare stores or models.
 
 ## Operations
 
 | Node / tool | Access | What it does |
 |---|---|---|
 | `upsert` | write | chunks → embeddings → store; it creates the collection with the model on first use (`model`, default the preset's). A chunk whose `id` is stored replaces it, and keeps its embedding when its text and title are the same, and so is the [definition of its model](#a-models-definition) (`reembed: true` embeds it again). A chunk with a `vector` (its embedding, made already, with the `fingerprint` that came with it) is stored with it, without the model ([copying a collection](#copying-a-collection)). Reports `embedded`, `kept`, `given` and `usage: {embedding_tokens, cost}` |
-| `search` | read | the chunks most similar to `query` (or several `queries`, up to `limits.max_queries`, 32), `k` each, with a [`filter`](#filters) and `min_score`; scores are cosine similarities. `ms` gives the time of the model (`embed`) and of the store (`search`) apart. `ef` (1 to 1000) sets the breadth of the HNSW search, more finding more and slower (PostgreSQL `hnsw.ef_search`, by default max(40, 2k), at most 1000; Qdrant `hnsw_ef`, max(64, 2k)). `exact: true` compares the text with every chunk the filter keeps instead of going through the index (PostgreSQL turns its index scans off, Qdrant searches exactly, SQLite always does): slower, the reference an index's results are measured against |
+| `search` | read | the chunks most similar to `query` (or several `queries`, up to `limits.max_queries`, 32), `k` each, with a [`filter`](#filters) and `min_score`; scores are cosine similarities. `ms` gives the time of the model (`embed`) and of the store (`search`) apart. `ef` (1 to 1000) sets the breadth of the HNSW search, more finding more and slower (PostgreSQL `hnsw.ef_search`, by default max(40, 2k), at most 1000; Qdrant `hnsw_ef`, max(64, 2k)). `exact: true` compares the text with every chunk the filter keeps instead of going through the index (PostgreSQL turns its index scans off, Qdrant searches exactly, SQLite always does): slower, the reference an index's results are measured against. `rerank` [reads the first candidates again](#reranking) with a reranker |
+| `rerank` | read | orders `texts`, `items` (objects with a `text`, given back whole) or the chunks of `collection` by `ids`, by how well they answer `query`, with a [reranker](#reranking) (`model`); `k` and `min_score` keep the first and the best. Only with rerankers in the preset |
 | `get` | read | chunks by `ids` |
 | `list` | read | the chunks of a [`filter`](#filters), `limit` at a time (100 by default, at most `max_list`, 5000), without their text unless `with_text`, and with only the `fields` named (`id`, `meta.<key>`…) when given; with `vectors: true` their embeddings too (`vector`, as stored, and the `fingerprint` of the model's definition that made it, at most `max_items` chunks a page), and the collection's `model` and `dims`. A page holds the chunks that fit in one result gosidian takes (1 MB): with vectors or long texts, fewer than `limit`. `cursor` is the `next` of the page before, empty after the last. The first page, without `cursor`, gives `total`, the chunks of the filter: a count is a pass over the filter, which the later pages do not repeat. In order of id; in Qdrant, of point |
 | `update` | write | changes keys of the `meta` of chunks, by `ids`, by [`filter`](#filters), or both: each key is set to its value, `null` removes it, up to `limits.max_update_keys` (64) keys. The text and the embeddings stay. An update that would make a chunk's meta larger than `limits.max_meta` changes nothing; one that makes it smaller passes ([all or in part](#all-or-in-part)) |
@@ -137,6 +139,50 @@ Qdrant as float32, so a copy among the three searches as the original:
 the same chunks with the same scores. A collection kept as `halfvec` (over
 2000 numbers) gives its rounded numbers.
 
+## Reranking
+
+The cosine of two vectors made apart finds texts **similar** to a
+question; a reranker (a cross-encoder) reads the question together with
+each text and scores how well the text **answers** it. It is slower, so it
+reads only the first candidates of a search:
+
+```json
+{"collection": "procedure", "query": "…", "k": 5, "rerank": true, "candidates": 50, "min_rerank_score": 0.3}
+```
+
+- `rerank`: `true` for the preset's `default_reranker`, or a reranker's
+  name;
+- `candidates`: the chunks the cosine finds first, per question, which the
+  reranker reads (50 by default, at least `k`, at most `limits.max_rerank`,
+  200); it keeps the first `k`;
+- `min_rerank_score` leaves out what it scores below: a threshold under
+  which an answer would say it does not know;
+- each hit keeps its cosine in `score`, and has the reranker's in
+  `rerank_score`; equal scores keep the cosine's order. `ms.rerank` is the
+  reranker's time, `usage.rerank_tokens` what it read;
+- the reranker reads each chunk's text even when the result leaves it out
+  (`with_text: false`).
+
+`rerank` orders texts from anywhere, the results of another search (a
+full-text one, say) among them: `items` come back whole, with
+`rerank_score`.
+
+A reranker's endpoint is any API with `POST /rerank` taking `model`,
+`query` and `documents` and giving `results` of `index` and
+`relevance_score`: llama.cpp's server started with `--reranking`, vLLM,
+Jina, Cohere (Hugging Face's TEI has another format). Some give the
+model's logits, llama.cpp's among them: `sigmoid: true` maps them to 0..1,
+so a threshold reads the same with another endpoint. llama.cpp's server
+reads a question and a text in one pass of its context, and fails a request
+with a longer one: `max_chars` cuts the texts. A character can be a token
+(in a table or a code: a paragraph of 8000 characters made 4149 tokens),
+so keep it under the context in tokens less the question's, 4000 for
+`-c 4096`.
+
+On an RTX 4060 Ti, bge-reranker-v2-m3 (Q8_0, in 576 MiB of llama.cpp's
+server, beside Ollama) read 30,000-35,000 tokens a second: 50 candidates of
+some 600 characters in 0.3 s, 100 in 0.6 s.
+
 ## Graphs
 
 From gosidian 2.87 the plugin offers two graphs to the Graph window and
@@ -179,16 +225,30 @@ models:
     dims: 768              # the size of its vectors
     dimensions: 0          # cut them to this size (Matryoshka), normalized again
     query_prefix: "task: search result | query: "
+    # query_id: embeddinggemma:300m-short   # the questions to another id of the same weights
     document_template: "title: {title} | text: {text}"
     batch: 32
     cost: {input: 0}       # dollars per million tokens
 default_model: embeddinggemma
+rerankers:                 # none: no reranking
+  - id: bge-reranker-v2-m3
+    name: bge-reranker     # what a call names it by (default: id)
+    endpoint:              # an API with /rerank; none, the preset's endpoint
+      base_url: http://llama-rerank:8081/v1
+      api_key_env: RERANK_API_KEY
+      timeout: 60s
+    document_template: "{title}\n{text}"   # default "{text}"; a missing title is empty
+    max_chars: 4000        # cut longer texts (0: whole): under the context in tokens
+    batch: 32              # texts per request
+    sigmoid: true          # the endpoint gives logits: map them to 0..1
+    cost: {input: 0}       # dollars per million tokens read
+default_reranker: bge-reranker
 store:
   kind: postgres           # postgres, qdrant or sqlite
   url: postgres://gosidian@postgres:5432/vectors
   # meta_index: {status: keyword, since: integer}   # Qdrant: the meta keys its filters use
 limits: {max_items: 500, max_list: 5000, max_text: 32768, max_k: 100, max_queries: 32, max_result: 1024000,
-         max_in: 1000, max_meta: 16384, max_update_keys: 64, max_graph: 5000, max_graph_k: 20}
+         max_in: 1000, max_meta: 16384, max_update_keys: 64, max_graph: 5000, max_graph_k: 20, max_rerank: 200}
 ```
 
 **The limits** are the installer's to set. `max_items` chunks per write
@@ -202,7 +262,8 @@ an update's as it writes jsonb, a space after each `:` and `,`);
 `max_update_keys` keys one `update` sets or removes. `max_graph` chunks or
 documents of a [graph](#graphs), `max_graph_k` neighbours of each: gosidian
 draws up to its `[web] graph_max_nodes` (5000 by default), so raise the two
-together. The lengths of an id (256), a doc and a title (1024), a parent
+together. `max_rerank` texts one `rerank` reads, and candidates per
+question of a search with `rerank`. The lengths of an id (256), a doc and a title (1024), a parent
 (256) and a cursor (256) are formats, not limits, and stay as they are.
 
 **Prefixes matter.** No endpoint adds them. On a bench of Italian
@@ -224,7 +285,16 @@ Change one of them in the preset, a better template say, and upsert the
 documents again: every chunk is embedded again, those whose text is the
 same too, so a collection does not hold vectors of two definitions side by
 side. `query_prefix` is not in it: it makes the questions, not what is
-stored. Nor is `endpoint.base_url`: the same model served elsewhere in
+stored; nor is `query_id`.
+
+**`query_id`** sends the questions to another id of the same model: the
+same weights served with a shorter context, say an Ollama model made
+with a smaller `num_ctx`. A model that embeds long chunks needs a long
+context, and its memory with it; a question is short, and the short one
+takes less, enough to stay loaded beside the model that writes an answer
+(a chat that would otherwise load one and unload the other at every
+message). The two must give the same vectors: check a few before using
+it. Nor is `endpoint.base_url`: the same model served elsewhere in
 another way (another quantization) wants `reembed: true`.
 
 Chunks stored before 0.3.0 have no fingerprint: what made them is
@@ -329,7 +399,7 @@ CREATE ROLE "q_rag" LOGIN PASSWORD '…';
 ```yaml
 services:
   vec-pg:
-    image: ghcr.io/daniele-chiappa/gosidian-database:0.4.0
+    image: ghcr.io/daniele-chiappa/gosidian-database:0.5.0
     environment:
       DB_NAME: vec-pg                 # the name gosidian registers it with
       GOSIDIAN_PLUGIN_TOKEN: ${VEC_PG_TOKEN}

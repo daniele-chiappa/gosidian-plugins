@@ -23,6 +23,20 @@ models:
   - id: granite-embedding-r2
     dims: 768
 default_model: nemotron-3-embed-1b
+# A reranker on another llama-server, started with --reranking: a search
+# with rerank reads its first candidates again. bge-reranker-v2-m3 (Q8_0)
+# takes 576 MiB and reads some 30,000 tokens a second on an RTX 4060 Ti.
+# The server gives the model's logits, which sigmoid maps to 0..1, and
+# reads a question and a text in its context (-c 4096): max_chars cuts the
+# longer texts, under 4096 as a character can be a token.
+rerankers:
+  - id: bge-reranker-v2-m3
+    endpoint:
+      base_url: http://gpu.lan:8081/v1
+      api_key_env: LLAMA_API_KEY
+    document_template: "{title}\n{text}"
+    max_chars: 4000
+    sigmoid: true
 store:
   kind: sqlite
   path: /data

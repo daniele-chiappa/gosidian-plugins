@@ -33,15 +33,16 @@ type Plugin struct {
 	env   Env
 	store Store
 	emb   *Embedder
+	rank  *Ranker
 	query Querier
 	sem   chan struct{}
 	log   *slog.Logger
 }
 
-// NewPlugin is the plugin of a preset, its store and its embedder; query
-// is nil while DB_QUERY is off.
-func NewPlugin(cfg *Config, env Env, store Store, emb *Embedder, query Querier, log *slog.Logger) *Plugin {
-	return &Plugin{cfg: cfg, env: env, store: store, emb: emb, query: query,
+// NewPlugin is the plugin of a preset, its store, its embedder and its
+// rerankers; query is nil while DB_QUERY is off.
+func NewPlugin(cfg *Config, env Env, store Store, emb *Embedder, rank *Ranker, query Querier, log *slog.Logger) *Plugin {
+	return &Plugin{cfg: cfg, env: env, store: store, emb: emb, rank: rank, query: query,
 		sem: make(chan struct{}, max(env.QueryConcurrency, 1)), log: log}
 }
 
@@ -68,6 +69,24 @@ var filterSchema = map[string]any{"type": "object", "description": "Every field 
 
 func (p *Plugin) operations() []operation {
 	coll := prop("string", "The collection: lower-case letters, digits and _")
+	search := map[string]any{
+		"collection": coll,
+		"query":      prop("string", "The text to look for"),
+		"queries":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": fmt.Sprintf("Several texts at once, instead of query: at most %d (limits.max_queries)", p.cfg.Limits.MaxQueries)},
+		"k":          prop("integer", "Results per text (default 5)"),
+		"filter":     filterSchema,
+		"min_score":  prop("number", "Leave out the results below this cosine similarity"),
+		"with_text":  prop("boolean", "Give the chunks' text (default true)"),
+		"exact":      prop("boolean", "Compare the text with every chunk the filter keeps, not through the index: slower, the reference an index's results are measured against (SQLite always does)"),
+		"ef":         prop("integer", "The breadth of the HNSW search, 1 to 1000: more finds more, slower (Postgres hnsw.ef_search, Qdrant hnsw_ef); 0 or none the preset's store.ef, or max(40, 2k) up to 1000 and max(64, 2k)"),
+	}
+	searchDesc := "Chunks similar to a text, by the cosine of their embeddings: similar, not necessarily relevant"
+	if len(p.cfg.Rerankers) > 0 {
+		searchDesc += "; with rerank, a reranker reads the first candidates with the text and orders them by relevance"
+		search["rerank"] = map[string]any{"description": fmt.Sprintf("Order the candidates again with a reranker: true for the preset's (%s), or its name (%s)", p.cfg.DefaultReranker, p.rerankerNames())}
+		search["candidates"] = prop("integer", fmt.Sprintf("With rerank: the chunks the cosine finds first, per text, which the reranker reads, k of them kept (default 50, at least k, at most %d, limits.max_rerank)", p.cfg.Limits.MaxRerank))
+		search["min_rerank_score"] = prop("number", "With rerank: leave out the results the reranker scores below this")
+	}
 	ops := []operation{
 		{"upsert", "write", "Store chunks with their embeddings in a collection, which it creates with the model on first use; a chunk with the id of one stored replaces it, and keeps its embedding when its text and title, and the preset's definition of the model, are the same",
 			object([]string{"collection", "chunks"}, map[string]any{
@@ -83,18 +102,7 @@ func (p *Plugin) operations() []operation {
 						"description": "Its embedding, made already by the collection's model (from list with vectors, in another archive): as many numbers as the collection's dims, kept instead of embedding the text; one of length 1 stays as given, another is made length 1"},
 					"fingerprint": prop("string", "With vector: the fingerprint of the model's definition that made it, as list with vectors gives it; a later upsert of the same text keeps the vector only when it is the preset's")})},
 			}), (*Plugin).doUpsert},
-		{"search", "read", "Chunks similar to a text, by the cosine of their embeddings: similar, not necessarily relevant",
-			object([]string{"collection"}, map[string]any{
-				"collection": coll,
-				"query":      prop("string", "The text to look for"),
-				"queries":    map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": fmt.Sprintf("Several texts at once, instead of query: at most %d (limits.max_queries)", p.cfg.Limits.MaxQueries)},
-				"k":          prop("integer", "Results per text (default 5)"),
-				"filter":     filterSchema,
-				"min_score":  prop("number", "Leave out the results below this cosine similarity"),
-				"with_text":  prop("boolean", "Give the chunks' text (default true)"),
-				"exact":      prop("boolean", "Compare the text with every chunk the filter keeps, not through the index: slower, the reference an index's results are measured against (SQLite always does)"),
-				"ef":         prop("integer", "The breadth of the HNSW search, 1 to 1000: more finds more, slower (Postgres hnsw.ef_search, Qdrant hnsw_ef); 0 or none the preset's store.ef, or max(40, 2k) up to 1000 and max(64, 2k)"),
-			}), (*Plugin).doSearch},
+		{"search", "read", searchDesc, object([]string{"collection"}, search), (*Plugin).doSearch},
 		{"get", "read", "Chunks of a collection by id",
 			object([]string{"collection", "ids"}, map[string]any{"collection": coll,
 				"ids": map[string]any{"type": "array", "items": map[string]any{"type": "string"}}}), (*Plugin).doGet},
@@ -123,6 +131,19 @@ func (p *Plugin) operations() []operation {
 			object([]string{"collection", "to"}, map[string]any{"collection": coll,
 				"to":     prop("string", "The collection to copy into: a new one, or one of the same model and size; a chunk with an id it has replaces it"),
 				"filter": filterSchema}), (*Plugin).doCopy},
+	}
+	if len(p.cfg.Rerankers) > 0 {
+		ops = append(ops, operation{"rerank", "read", "Order texts by how well they answer a question, with a reranker that reads the question with each: texts, objects with a text (a search's hits, results of another source), or chunks of a collection by id",
+			object([]string{"query"}, map[string]any{
+				"query":      prop("string", "The question"),
+				"texts":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "The texts to order"},
+				"items":      map[string]any{"type": "array", "items": map[string]any{"type": "object"}, "description": "Objects to order, each with its text (and title, for the reranker's template): given back whole, with rerank_score"},
+				"collection": coll,
+				"ids":        map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "With collection: the chunks to order"},
+				"model":      prop("string", fmt.Sprintf("The reranker (default %s): %s", p.cfg.DefaultReranker, p.rerankerNames())),
+				"k":          prop("integer", "Keep the first k (default all)"),
+				"min_score":  prop("number", "Leave out those the reranker scores below this"),
+			}), (*Plugin).doRerank})
 	}
 	if p.query != nil {
 		desc, props := p.queryInput()
@@ -513,6 +534,17 @@ func (p *Plugin) doSearch(ctx context.Context, req mcp.CallToolRequest, project 
 	if err != nil {
 		return nil, err
 	}
+	rr, reranked, err := p.searchReranker(req.GetArguments()["rerank"])
+	if err != nil {
+		return nil, err
+	}
+	withText, n := req.GetBool("with_text", true), k
+	if reranked {
+		n = int(req.GetFloat("candidates", float64(max(k, 50))))
+		if n < k || n > p.cfg.Limits.MaxRerank {
+			return nil, fmt.Errorf("candidates: k (%d) to %d (limits.max_rerank)", k, p.cfg.Limits.MaxRerank)
+		}
+	}
 	t0 := time.Now()
 	vecs, usage, err := p.emb.Queries(ctx, m, queries)
 	if err != nil {
@@ -527,13 +559,14 @@ func (p *Plugin) doSearch(ctx context.Context, req mcp.CallToolRequest, project 
 	if ef == 0 {
 		ef = p.cfg.Store.EF
 	}
-	results, err := p.store.Search(ctx, project, c, vecs, k, f, SearchOptions{WithText: req.GetBool("with_text", true), Exact: exact, EF: ef})
+	results, err := p.store.Search(ctx, project, c, vecs, n, f, SearchOptions{WithText: withText || reranked, Exact: exact, EF: ef})
 	if err != nil {
 		return nil, err
 	}
 	// The time of the model and of the store apart: a comparison of
 	// archives or indexes reads the second.
-	ms := map[string]float64{"embed": msSince(t0, t1), "search": msSince(t1, time.Now())}
+	t2 := time.Now()
+	ms := map[string]float64{"embed": msSince(t0, t1), "search": msSince(t1, t2)}
 	if min, ok := req.GetArguments()["min_score"].(float64); ok {
 		for i, hits := range results {
 			kept := hits[:0]
@@ -545,6 +578,36 @@ func (p *Plugin) doSearch(ctx context.Context, req mcp.CallToolRequest, project 
 			results[i] = kept
 		}
 	}
+	if reranked {
+		minRerank, hasMin := req.GetArguments()["min_rerank_score"].(float64)
+		for i, hits := range results {
+			docs := make([]Document, len(hits))
+			for j, h := range hits {
+				docs[j] = Document{Text: h.Text, Title: h.Title}
+			}
+			scores, u, err := p.rank.Scores(ctx, rr, queries[i], docs)
+			if err != nil {
+				return nil, err
+			}
+			usage.add(u)
+			for j := range hits {
+				hits[j].RerankScore = &scores[j]
+			}
+			// Equal scores keep the cosine's order.
+			sort.SliceStable(hits, func(a, b int) bool { return *hits[a].RerankScore > *hits[b].RerankScore })
+			kept := hits[:0]
+			for _, h := range hits {
+				if len(kept) < k && (!hasMin || *h.RerankScore >= minRerank) {
+					if !withText {
+						h.Text = ""
+					}
+					kept = append(kept, h)
+				}
+			}
+			results[i] = kept
+		}
+		ms["rerank"] = msSince(t2, time.Now())
+	}
 	for i := range results {
 		if results[i] == nil {
 			results[i] = []Hit{}
@@ -554,12 +617,162 @@ func (p *Plugin) doSearch(ctx context.Context, req mcp.CallToolRequest, project 
 	if exact {
 		out["exact"] = true
 	}
+	if reranked {
+		out["reranker"], out["candidates"] = rr.Name, n
+	}
 	if single {
 		out["hits"] = results[0]
 	} else {
 		out["results"] = results
 	}
 	return out, nil
+}
+
+// searchReranker is the reranker a search's rerank names: true the
+// preset's default, a string by name; none (false, absent) reranks not.
+func (p *Plugin) searchReranker(v any) (Reranker, bool, error) {
+	switch v := v.(type) {
+	case nil:
+		return Reranker{}, false, nil
+	case bool:
+		if !v {
+			return Reranker{}, false, nil
+		}
+		r, err := p.reranker("")
+		return r, err == nil, err
+	case string:
+		r, err := p.reranker(v)
+		return r, err == nil, err
+	}
+	return Reranker{}, false, errors.New("rerank: true, or the name of a reranker of the preset")
+}
+
+// reranker finds a reranker by name; empty, the preset's default.
+func (p *Plugin) reranker(name string) (Reranker, error) {
+	if len(p.cfg.Rerankers) == 0 {
+		return Reranker{}, errors.New("rerank: the preset has no rerankers")
+	}
+	if name == "" {
+		name = p.cfg.DefaultReranker
+	}
+	r, ok := p.cfg.Reranker(name)
+	if !ok {
+		return r, fmt.Errorf("reranker %q is no reranker of the preset (%s)", name, p.rerankerNames())
+	}
+	return r, nil
+}
+
+func (p *Plugin) rerankerNames() string {
+	names := make([]string, len(p.cfg.Rerankers))
+	for i, r := range p.cfg.Rerankers {
+		names[i] = r.Name
+	}
+	return strings.Join(names, ", ")
+}
+
+// doRerank orders texts, objects with a text, or stored chunks by the
+// reranker's score for a question.
+func (p *Plugin) doRerank(ctx context.Context, req mcp.CallToolRequest, project string) (any, error) {
+	query := req.GetString("query", "")
+	if strings.TrimSpace(query) == "" {
+		return nil, errors.New("query: the question the texts are ordered for")
+	}
+	rr, err := p.reranker(req.GetString("model", ""))
+	if err != nil {
+		return nil, err
+	}
+	var texts []string
+	var items []map[string]any
+	if err := decode(req.GetArguments(), "texts", &texts); err != nil {
+		return nil, err
+	}
+	if err := decode(req.GetArguments(), "items", &items); err != nil {
+		return nil, err
+	}
+	ids, err := p.ids(req)
+	if err != nil {
+		return nil, err
+	}
+	given := 0
+	for _, n := range []int{len(texts), len(items), len(ids)} {
+		if n > 0 {
+			given++
+		}
+	}
+	if given != 1 {
+		return nil, errors.New("one of texts, items, or collection with ids")
+	}
+	if n := len(texts) + len(items) + len(ids); n > p.cfg.Limits.MaxRerank {
+		return nil, fmt.Errorf("%d texts, at most %d (limits.max_rerank)", n, p.cfg.Limits.MaxRerank)
+	}
+	var docs []Document
+	var out []map[string]any
+	switch {
+	case len(texts) > 0:
+		for i, t := range texts {
+			docs = append(docs, Document{Text: t})
+			out = append(out, map[string]any{"index": i, "text": t})
+		}
+	case len(items) > 0:
+		for i, it := range items {
+			t, _ := it["text"].(string)
+			if strings.TrimSpace(t) == "" {
+				return nil, fmt.Errorf("items[%d]: no text", i)
+			}
+			title, _ := it["title"].(string)
+			docs = append(docs, Document{Text: t, Title: title})
+			out = append(out, it)
+		}
+	default:
+		c, _, err := p.collection(ctx, project, req.GetString("collection", ""))
+		if err != nil {
+			return nil, err
+		}
+		chunks, err := p.store.Get(ctx, project, c, ids)
+		if err != nil {
+			return nil, err
+		}
+		for _, ch := range chunks {
+			docs = append(docs, Document{Text: ch.Text, Title: ch.Title})
+			b, err := json.Marshal(ch)
+			if err != nil {
+				return nil, err
+			}
+			var m map[string]any
+			if err := json.Unmarshal(b, &m); err != nil {
+				return nil, err
+			}
+			out = append(out, m)
+		}
+	}
+	k := int(req.GetFloat("k", float64(len(docs))))
+	if k <= 0 {
+		return nil, errors.New("k: 1 or more")
+	}
+	start := time.Now()
+	var scores []float64
+	var usage Usage
+	if len(docs) > 0 {
+		if scores, usage, err = p.rank.Scores(ctx, rr, query, docs); err != nil {
+			return nil, err
+		}
+	}
+	for i := range out {
+		out[i]["rerank_score"] = scores[i]
+	}
+	order := make([]int, len(out))
+	for i := range order {
+		order[i] = i
+	}
+	sort.SliceStable(order, func(a, b int) bool { return scores[order[a]] > scores[order[b]] })
+	minScore, hasMin := req.GetArguments()["min_score"].(float64)
+	hits := []map[string]any{}
+	for _, i := range order {
+		if len(hits) < k && (!hasMin || scores[i] >= minScore) {
+			hits = append(hits, out[i])
+		}
+	}
+	return map[string]any{"reranker": rr.Name, "hits": hits, "usage": usage, "ms": map[string]float64{"rerank": msSince(start, time.Now())}}, nil
 }
 
 func (p *Plugin) ids(req mcp.CallToolRequest) ([]string, error) {
@@ -779,7 +992,11 @@ func (p *Plugin) doCollections(ctx context.Context, req mcp.CallToolRequest, pro
 	if list == nil {
 		list = []Collection{}
 	}
-	return map[string]any{"collections": list, "models": p.modelNames(), "default_model": p.cfg.DefaultModel}, nil
+	out := map[string]any{"collections": list, "models": p.modelNames(), "default_model": p.cfg.DefaultModel}
+	if len(p.cfg.Rerankers) > 0 {
+		out["rerankers"], out["default_reranker"] = p.rerankerNames(), p.cfg.DefaultReranker
+	}
+	return out, nil
 }
 
 // doCopy copies a collection's chunks, those of a filter, into another
