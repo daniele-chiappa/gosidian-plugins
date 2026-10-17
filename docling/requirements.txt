@@ -1,5 +1,5 @@
 # torch and torchvision come from the CPU index first (Dockerfile).
-docling==2.132.0
+docling==2.133.0
 mcp==2.3.0
 # Used by the server itself: mcp 2 no longer brings httpx.
 httpx==0.28.1

@@ -4,6 +4,21 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.3] — 2026-10-17
+
+docling 2.133.0; nothing changes for gosidian. The manifest is the same
+but for the version.
+
+### Changed
+- **docling 2.133.0**, from 2.132.0: among its fixes, list numbering read
+  from a Word paragraph's own properties, and a path with an upper-case
+  extension recognized. On the test documents (Word old and new,
+  presentations, spreadsheets, scans and PDF pages) the markdown is the
+  same as with 0.5.2.
+- The packages resolve as PyPI stood on 3 October at 12:00 (docling
+  2.133.0 came out at 11:30); only docling and docling-slim change in the
+  image, and the models are the same.
+
 ## [0.5.2] — 2026-10-17
 
 The MCP SDK for Python 2; nothing changes for gosidian: the same tools,
