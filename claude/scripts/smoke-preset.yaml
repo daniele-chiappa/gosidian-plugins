@@ -1,0 +1,7 @@
+# The preset of smoke-test.sh: a subscription's token, the default models
+# and tools, small limits.
+name: claude-smoke
+credentials:
+  oauth_token_file: /run/secrets/claude-oauth-token
+limits:
+  default: {max_turns: 3, max_seconds: 180, max_budget_usd: 0.5}

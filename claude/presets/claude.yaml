@@ -1,0 +1,32 @@
+# Claude Code on the subscriber's own subscription, for the subscriber's own
+# pipelines (Anthropic's terms: see the README). The token comes from
+# `claude setup-token`, in a file only root reads in the container. A
+# product that serves others takes an API key instead: credentials:
+# {api_key_file: /run/secrets/anthropic-api-key}, and no min_left_percent.
+name: claude
+description: Claude Code on the subscription
+credentials:
+  oauth_token_file: /run/secrets/claude-oauth-token
+version: latest
+# Aliases: each version of Claude Code resolves them to its models (2.1.301:
+# claude-haiku-5-5, claude-sonnet-5-5, claude-opus-5-5). The first is the
+# default of a node.
+models: [haiku, sonnet, opus]
+effort:
+  allowed: [low, medium, high, xhigh, max]
+tools:
+  # Reading and searching the step's files only. Write and Edit let the
+  # agent give files back in out/; Bash and WebFetch reach the container's
+  # network: allow them on purpose.
+  allowed: [Read, Grep, Glob, Write, Edit]
+  default: [Read, Grep, Glob]
+limits:
+  default: {max_turns: 20, max_seconds: 10m, max_budget_usd: 1}
+  max: {max_turns: 60, max_seconds: 14m, max_budget_usd: 5}
+  # The pipelines leave this much of the session (5 hours) and of the week
+  # to the subscriber's own sessions.
+  min_left_percent: {session: 20, week: 10}
+system: |
+  You work for a pipeline of gosidian, with no person to ask: when the task
+  is unclear, say what you assumed. Answer in the language of the task, and
+  name the file a fact comes from.

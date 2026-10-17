@@ -1,0 +1,7 @@
+name: claude-sep
+credentials:
+  oauth_token_env: CLAUDE_TEST_TOKEN
+upstream: http://claude-harness:9000
+models: [haiku]
+tools:
+  allowed: [Read, Bash, Write]

@@ -98,6 +98,23 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # claude: npm packages (Claude Code is not among them: the plugin installs
+  # it at runtime, and its update node keeps it)
+  - package-ecosystem: "npm"
+    directory: "/claude"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "claude"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # database: Go modules
   - package-ecosystem: "gomod"
     directory: "/database"
@@ -116,7 +133,7 @@ updates:
 
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi", "/database", "/images"]
+    directories: ["/storage", "/docling", "/pi", "/claude", "/database", "/images"]
     schedule:
       interval: "weekly"
       day: "monday"
