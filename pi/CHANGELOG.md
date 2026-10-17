@@ -4,6 +4,16 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.1.2] — 2026-10-17
+
+Dependency updates; nothing changes for gosidian. The manifest is the same
+but for the version.
+
+### Changed
+- @modelcontextprotocol/sdk 1.32.0.
+- @types/node 24.19.1: Node's types stay on the image's Node, 24, and
+  Dependabot leaves their majors alone.
+
 ## [0.1.1] — 2026-10-12
 
 The first public release: 0.1.0 with the MCP SDK's fix. Needs gosidian

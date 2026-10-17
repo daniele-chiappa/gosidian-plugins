@@ -4,6 +4,17 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.4.1] — 2026-10-17
+
+The widget built with TypeScript 7; nothing changes for gosidian nor for a
+page that holds the widget: `chat.js` is the same, byte for byte. The
+manifest is the same but for the version.
+
+### Changed
+- TypeScript 7.0.2 builds the widget. TypeScript 7 has no module `none`
+  and wants `rootDir` along with `outDir`: the widget, a script with no
+  imports, is built with module `preserve` and `rootDir` `src`.
+
 ## [0.4.0] — 2026-10-17
 
 Images in place in an answer, and the bots back at once after a restart.

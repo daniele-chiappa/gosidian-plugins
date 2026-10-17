@@ -33,7 +33,7 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 t
 # The rest resolves as PyPI stood on PYPI_BEFORE: the same build every time,
 # and no package younger than two weeks at release (rapidocr 3.10.0 broke
 # docling 2.130 two days after it came out).
-ARG PYPI_BEFORE=2026-10-01T12:00:00Z
+ARG PYPI_BEFORE=2026-10-03T00:00:00Z
 COPY requirements.txt /app/requirements.txt
 RUN pip install uv==0.12.19 \
  && uv pip install --system --exclude-newer "${PYPI_BEFORE}" -r /app/requirements.txt \

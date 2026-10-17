@@ -4,6 +4,17 @@ The changes of the `storage` plugin, newest first. A tag
 `storage/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-storage:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.2] — 2026-10-17
+
+Dependency updates; nothing changes for gosidian. The manifest is the same
+but for the version.
+
+### Changed
+- gofakes3 0.0.10, golang.org/x/net 0.59.0 and google.golang.org/api
+  0.300.0. With them gRPC moves to its v1.84.0 release, in place of the
+  pre-release 0.2.1 took for GHSA-2v4p-qf9q-27wj, and the Google,
+  OpenTelemetry and golang.org/x modules to their current versions.
+
 ## [0.2.1] — 2026-10-12
 
 The first public release: 0.2.0 with gRPC's fix. Needs gosidian 2.82 or

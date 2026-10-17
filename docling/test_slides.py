@@ -191,14 +191,14 @@ class SlidesTest(unittest.TestCase):
 
     def test_the_tool_reads_slides_by_default(self):
         r = self.call()
-        self.assertFalse(r.isError, r.content)
-        self.assertIn("## Slide 2 — Compost results", r.structuredContent["markdown"])
-        self.assertIn("**Notes**", r.structuredContent["markdown"])
+        self.assertFalse(r.is_error, r.content)
+        self.assertIn("## Slide 2 — Compost results", r.structured_content["markdown"])
+        self.assertIn("**Notes**", r.structured_content["markdown"])
 
     def test_the_tool_without_slides(self):
         r = self.call(slides=False, office="native")
-        self.assertFalse(r.isError, r.content)
-        md = r.structuredContent["markdown"]
+        self.assertFalse(r.is_error, r.content)
+        md = r.structured_content["markdown"]
         self.assertNotIn("## Slide", md)
         self.assertNotIn("Welcome everyone", md)
         self.assertIn(FOOTER, md)

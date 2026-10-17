@@ -63,7 +63,7 @@ plugin keeps what matters out of reach:
 ```yaml
 services:
   pi-openrouter:
-    image: ghcr.io/daniele-chiappa/gosidian-pi:0.1.1
+    image: ghcr.io/daniele-chiappa/gosidian-pi:0.1.2
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PI_OPENROUTER_TOKEN:?}
@@ -181,7 +181,7 @@ The node's `timeout` (5 minutes by default) must cover `max_seconds`:
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.1.1 -t gosidian-pi:0.1.1 pi/
+docker build --build-arg VERSION=0.1.2 -t gosidian-pi:0.1.2 pi/
 docker run --rm -v "$PWD/pi:/app" -w /app node:24-alpine sh -c 'npm ci --ignore-scripts && npm run check && npm test'
 pi/scripts/separation-test.sh     # the image as in production: users, secrets, links, leftovers
 ```

@@ -4,6 +4,24 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.2] — 2026-10-17
+
+The MCP SDK for Python 2; nothing changes for gosidian: the same tools,
+the same answers, the same conversions. The manifest is the same but for
+the version.
+
+### Changed
+- **mcp 2.3.0**, from 1.30.0. The server hands its handlers to the
+  constructor, as the 2.x low-level server wants, and does itself what
+  1.x did for it: a tool's arguments checked against its schema, a failure
+  given back as a tool error with its message, the manifest as JSON text
+  and structured content.
+- httpx and jsonschema are in `requirements.txt`: the server uses them,
+  and mcp 2 no longer brings httpx.
+- The packages resolve as PyPI stood on 3 October (mcp 2.3.0 came out on
+  the 2nd): mail-parser goes from 4.7.0 to 4.8.0 with it. 118 packages in
+  the image; the new ones are under BSD-3-Clause, MIT and Apache-2.0.
+
 ## [0.5.1] — 2026-10-17
 
 LibreOffice 26.8, and a limit on its memory: a Word document LibreOffice

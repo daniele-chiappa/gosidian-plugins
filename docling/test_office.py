@@ -287,8 +287,8 @@ class RouteTest(unittest.TestCase):
     def call(self, name, data, **settings):
         self.as_docx = data
         r = asyncio.run(server.call_tool("convert", {"file": {"name": name, "data": base64.b64encode(data).decode()}} | settings))
-        self.assertFalse(r.isError, r.content)
-        return r.structuredContent
+        self.assertFalse(r.is_error, r.content)
+        return r.structured_content
 
     def test_auto_reads_a_plain_docx_native(self):
         got = self.call("care.docx", plain())
@@ -345,7 +345,7 @@ class RouteTest(unittest.TestCase):
     def test_a_wrong_office(self):
         self.as_docx = plain()
         r = asyncio.run(server.call_tool("convert", {"file": {"name": "a.docx", "data": base64.b64encode(plain()).decode()}, "office": "word"}))
-        self.assertTrue(r.isError)
+        self.assertTrue(r.is_error)
         self.assertIn("auto, pdf, native", r.content[0].text)
 
 
@@ -380,6 +380,40 @@ class OfficeCommandTest(unittest.TestCase):
         self.assertIn("bad_alloc", str(e.exception))
 
 
+class ToolCallTest(unittest.TestCase):
+    """tools/list and tools/call as the server answers them, the SDK's 1.x way."""
+
+    def call(self, name, arguments=None):
+        params = server.types.CallToolRequestParams(name=name, arguments=arguments)
+        return asyncio.run(server.on_call_tool(None, params))
+
+    def test_the_tools(self):
+        r = asyncio.run(server.on_list_tools(None, None))
+        self.assertEqual([t.name for t in r.tools], ["gosidian_manifest", "convert"])
+
+    def test_the_manifest(self):
+        r = self.call("gosidian_manifest", {})
+        self.assertFalse(r.is_error)
+        self.assertEqual(r.structured_content, server.MANIFEST)
+        self.assertEqual(server.json.loads(r.content[0].text), server.MANIFEST)
+
+    def test_arguments_out_of_the_schema(self):
+        r = self.call("convert", {"ocr": True})
+        self.assertTrue(r.is_error)
+        self.assertIn("Input validation error: 'file' is a required property", r.content[0].text)
+
+    def test_no_such_tool(self):
+        r = self.call("nothing")
+        self.assertTrue(r.is_error)
+        self.assertEqual(r.content[0].text, "no tool nothing")
+
+    def test_a_failure_is_a_tool_error(self):
+        with mock.patch.object(server, "call_tool", side_effect=RuntimeError("the disk is full")):
+            r = self.call("convert", {"file": {"name": "a.pdf", "data": "AA=="}})
+        self.assertTrue(r.is_error)
+        self.assertEqual(r.content[0].text, "the disk is full")
+
+
 class NativeTest(unittest.TestCase):
     """A plain docx through docling's Word reader, as office: auto sends it."""
 
@@ -390,8 +424,8 @@ class NativeTest(unittest.TestCase):
         with mock.patch.object(server, "SOFFICE", "/usr/bin/soffice"), \
                 mock.patch.object(server, "converter", lambda *a, **k: DocumentConverter(allowed_formats=[InputFormat.DOCX])):
             r = asyncio.run(server.call_tool("convert", {"file": {"name": "care.docx", "data": base64.b64encode(plain()).decode()}}))
-        self.assertFalse(r.isError, r.content)
-        got = r.structuredContent
+        self.assertFalse(r.is_error, r.content)
+        got = r.structured_content
         self.assertEqual(got["office_used"], "native")
         self.assertRegex(got["markdown"], r"(?m)^#+ Seed drill care$")
         self.assertRegex(got["markdown"], r"\| *Hopper *\| *Empty it before winter\. *\|")

@@ -1,6 +1,6 @@
 {
   "name": "gosidian-pi",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin whose node runs a pi agent (pi.dev) on the files a pipeline hands it",
@@ -15,13 +15,13 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "1.0.4",
-    "@modelcontextprotocol/sdk": "1.31.0",
+    "@modelcontextprotocol/sdk": "1.32.0",
     "ajv": "8.20.0",
     "yaml": "2.9.1",
     "zod": "4.6.5"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.1",
     "typescript": "7.0.2"
   }
 }

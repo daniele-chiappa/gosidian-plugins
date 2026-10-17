@@ -4,6 +4,16 @@ The changes of the `claude` plugin, newest first. A tag `claude/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-claude:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.1.1] — 2026-10-17
+
+Dependency updates; nothing changes for gosidian. The manifest is the same
+but for the version.
+
+### Changed
+- @modelcontextprotocol/sdk 1.32.0.
+- @types/node 24.19.1: Node's types stay on the image's Node, 24, and
+  Dependabot leaves their majors alone.
+
 ## [0.1.0] — 2026-10-17
 
 The first version: Claude Code as a node of gosidian's pipelines. Needs

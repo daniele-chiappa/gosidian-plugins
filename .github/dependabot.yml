@@ -97,6 +97,11 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # Node's types follow the image's Node, 24: a later major describes
+    # APIs the runtime does not have.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # claude: npm packages (Claude Code is not among them: the plugin installs
   # it at runtime, and its update node keeps it)
@@ -114,6 +119,11 @@ updates:
     commit-message:
       prefix: "chore"
       include: "scope"
+    # Node's types follow the image's Node, 24: a later major describes
+    # APIs the runtime does not have.
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   # database: Go modules
   - package-ecosystem: "gomod"

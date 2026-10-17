@@ -53,6 +53,7 @@ import hashlib
 import hmac
 import html
 import io
+import json
 import logging
 import os
 import pathlib
@@ -66,6 +67,7 @@ import zipfile
 
 import anyio
 import httpx
+import jsonschema
 import mcp.types as types
 import uvicorn
 from mcp.server.lowlevel import Server
@@ -75,7 +77,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.5.1")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.5.2")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
@@ -863,22 +865,46 @@ def decode_file(args: dict) -> tuple[str, bytes]:
     return name, data
 
 
-app = Server("gosidian-docling", version=VERSION)
+TOOLS = [
+    types.Tool(name="gosidian_manifest", description="The manifest of this gosidian plugin.", input_schema={"type": "object"}),
+    types.Tool(
+        name="convert",
+        description="A document to markdown with docling; its pictures come back as embedded PNG resources (file:///fig-N.png).",
+        input_schema=CONVERT_TOOL_INPUT,
+    ),
+]
 
 
-@app.list_tools()
-async def list_tools() -> list[types.Tool]:
-    return [
-        types.Tool(name="gosidian_manifest", description="The manifest of this gosidian plugin.", inputSchema={"type": "object"}),
-        types.Tool(
-            name="convert",
-            description="A document to markdown with docling; its pictures come back as embedded PNG resources (file:///fig-N.png).",
-            inputSchema=CONVERT_TOOL_INPUT,
-        ),
-    ]
+async def on_list_tools(_ctx, _params) -> types.ListToolsResult:
+    return types.ListToolsResult(tools=TOOLS)
 
 
-@app.call_tool()
+def tool_error(text: str) -> types.CallToolResult:
+    return types.CallToolResult(content=[types.TextContent(type="text", text=text)], is_error=True)
+
+
+async def on_call_tool(_ctx, params: types.CallToolRequestParams) -> types.CallToolResult:
+    """A tools/call answered as the SDK's 1.x decorator did, which 2.x
+    leaves to the server: the arguments checked against the tool's schema,
+    the manifest as JSON text and structured content, and a failure as a
+    tool error with its message (2.x turns an exception into a bare
+    "Internal server error")."""
+    arguments = params.arguments or {}
+    tool = next((t for t in TOOLS if t.name == params.name), None)
+    if tool is not None:
+        try:
+            jsonschema.validate(instance=arguments, schema=tool.input_schema)
+        except jsonschema.ValidationError as e:
+            return tool_error(f"Input validation error: {e.message}")
+    try:
+        result = await call_tool(params.name, arguments)
+    except Exception as e:
+        return tool_error(str(e))
+    if isinstance(result, dict):
+        return types.CallToolResult(content=[types.TextContent(type="text", text=json.dumps(result, indent=2))], structured_content=result)
+    return result
+
+
 async def call_tool(name: str, arguments: dict):
     if name == "gosidian_manifest":
         return MANIFEST
@@ -932,7 +958,7 @@ async def call_tool(name: str, arguments: dict):
                 result["office_used"], result["office_reason"] = way
                 log.info("%s went %s: %s", fname, *way)
     except ConvertError as e:
-        return types.CallToolResult(content=[types.TextContent(type="text", text=str(e))], isError=True)
+        return tool_error(str(e))
     finally:
         if tmp is not None:
             shutil.rmtree(tmp, ignore_errors=True)
@@ -942,11 +968,13 @@ async def call_tool(name: str, arguments: dict):
         content.append(
             types.EmbeddedResource(
                 type="resource",
-                resource=types.BlobResourceContents(uri=f"file:///{fn}", mimeType="image/png", blob=base64.b64encode(blob).decode()),
+                resource=types.BlobResourceContents(uri=f"file:///{fn}", mime_type="image/png", blob=base64.b64encode(blob).decode()),
             )
         )
-    return types.CallToolResult(content=content, structuredContent=result)
+    return types.CallToolResult(content=content, structured_content=result)
 
+
+app = Server("gosidian-docling", version=VERSION, on_list_tools=on_list_tools, on_call_tool=on_call_tool)
 
 sessions = StreamableHTTPSessionManager(
     app=app,

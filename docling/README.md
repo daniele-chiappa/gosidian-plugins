@@ -128,7 +128,7 @@ cell, on its line), `title` (of a presentation, its first slide's),
 ```yaml
 services:
   gosidian-docling:
-    image: ghcr.io/daniele-chiappa/gosidian-docling:0.5.1
+    image: ghcr.io/daniele-chiappa/gosidian-docling:0.5.2
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${DOCLING_TOKEN:?}
@@ -167,7 +167,7 @@ image of 0.3.0 is about 600 MB larger, for LibreOffice.
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.5.1 -t gosidian-docling:0.5.1 docling/
+docker build --build-arg VERSION=0.5.2 -t gosidian-docling:0.5.2 docling/
 ```
 
 The image is built for amd64 only (about 5 GB: torch on the CPU, the

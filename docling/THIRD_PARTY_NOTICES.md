@@ -20,7 +20,7 @@ of its license as `LICENSE`.
 
 ## Python
 
-Python 3.12 (PSF-2.0), and 114 packages installed with pip. The main ones:
+Python 3.12 (PSF-2.0), and 118 packages installed with pip. The main ones:
 
 | Package | License |
 |---|---|
