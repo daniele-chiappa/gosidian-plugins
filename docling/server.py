@@ -11,18 +11,23 @@ two tools over Streamable HTTP at /mcp:
   url}, which it fetches from gosidian while the step runs; a file sent
   the old way ({name, mime, data} in base64) still works.
 
-Documents (doc, docx, odt, rtf) go through LibreOffice to PDF first,
-then docling reads the PDF: a figure made of a picture, arrows and
-labelled boxes stays whole, as the page shows it, where docling's Word
-reader takes it apart, and the text is the document's own. Spreadsheets go
-to xlsx, which docling reads as tables. office: native reads docx and
-xlsx as they are, and turns the older formats into them. Presentations
-(pptx, and ppt and odp turned into pptx) are read by docling's pptx
-reader and written slide by slide: a section per slide, titled, with its
-speaker notes, which a PDF loses; slides: false sends them the way office
-says, as before. A PDF is read with pypdfium2 by default: docling-parse
-reads twice the letters of a PDF that draws its bold as two strokes
-(pdf_backend chooses).
+Documents (doc, docx, odt, rtf) are read as docx by docling's Word reader
+(office: auto, the default; LibreOffice turns the older formats into
+docx), which keeps their tables, their pictures in place and their
+right-to-left text, unless drawings sit over their figures: shapes,
+arrows and text boxes over a picture, which the Word reader takes apart.
+Such a document goes through LibreOffice to PDF, which keeps the figure
+whole, as the page shows it; office: pdf and office: native force one way,
+and the result says which was taken. Spreadsheets go to xlsx, which
+docling reads as tables. Presentations (pptx, and ppt and odp turned into
+pptx) are read by docling's pptx reader and written slide by slide: a
+section per slide, titled, with its speaker notes, which a PDF loses;
+slides: false sends them through PDF, or as pptx with office: native. A
+PDF is read with pypdfium2 by default: docling-parse reads twice the
+letters of a PDF that draws its bold as two strokes (pdf_backend chooses).
+The text docling finds inside a picture of a page (a table of pictograms
+with their labels, a diagram's words), which its markdown leaves out,
+comes right under the picture (picture_text).
 
 The plugin reads no vault: gosidian hands it the file, or where to fetch
 it, and stores the pictures; it calls nothing but that address. Settings
@@ -55,6 +60,8 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import unicodedata
+import zipfile
 
 import anyio
 import httpx
@@ -67,7 +74,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.4.1")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.5.0")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
@@ -91,9 +98,9 @@ KINDS = {
     "jpeg": "image/jpeg",
 }
 
-# The kinds LibreOffice turns into one docling reads, when it is there:
-# to PDF by default (office: pdf), but a spreadsheet, which docling reads
-# as tables; to the format of 2007 with office: native.
+# The kinds LibreOffice turns into one docling reads, when it is there: to
+# the format of 2007, or to PDF, as office says (a spreadsheet always to
+# xlsx, which docling reads as tables).
 OFFICE = {
     "doc": ("docx", "application/msword"),
     "rtf": ("docx", "application/rtf"),
@@ -106,10 +113,25 @@ OFFICE = {
 if SOFFICE:
     KINDS.update({ext: mime for ext, (_, mime) in OFFICE.items()})
 
-# The kinds that go to PDF with office: pdf, docx and pptx among them
-# (the presentations with slides: false).
-VIA_PDF = {"doc", "docx", "odt", "rtf", "ppt", "pptx", "odp"}
-OFFICE_MODES = ("pdf", "native")
+# The documents office concerns: the Word ones, read as docx or through
+# PDF (office: auto looks at their drawings), and the presentations with
+# slides: false, through PDF or as pptx.
+WORD = {"doc", "docx", "odt", "rtf"}
+OFFICE_MODES = ("auto", "pdf", "native")
+
+# office: auto. A figure is a picture of at least FIGURE_MIN_CM on its
+# longer side (an icon in a table is smaller). A Word document goes through
+# PDF when drawings sit over at least DRAWN_SHARE of its figures; a manual
+# with numbered callouts on a few figures stays native. The document's
+# XML is not read past DOCX_XML_MAX bytes.
+FIGURE_MIN_CM = 2.5
+DRAWN_SHARE = 1 / 3
+DOCX_XML_MAX = 64 << 20
+
+# The text inside a picture of a page comes out under it when it holds at
+# least this many words of two letters or more: a table of pictograms, a
+# labelled diagram, not a photo with a stray letter or a logo.
+PICTURE_TEXT_MIN_WORDS = 4
 
 # The presentations, read slide by slide as pptx (slides, by default).
 SLIDES = {"pptx", "ppt", "odp"}
@@ -133,8 +155,10 @@ CONVERT_SETTINGS = {
         "images_scale": {"type": "number", "default": 2.0, "description": "The pictures' scale, 1 = 72 dpi."},
         "pdf_backend": {"type": "string", "enum": list(PDF_BACKENDS), "default": "pypdfium",
                         "description": "How a PDF's text is read: pypdfium (pypdfium2), or docling (docling-parse)."},
-        "office": {"type": "string", "enum": list(OFFICE_MODES), "default": "pdf",
-                   "description": "Documents (and presentations with slides off): through LibreOffice to PDF (pdf), or read as docx and pptx (native)."},
+        "office": {"type": "string", "enum": list(OFFICE_MODES), "default": "auto",
+                   "description": "Documents (doc, docx, odt, rtf): read as docx (native), through LibreOffice to PDF (pdf), or as docx unless drawings sit over their figures, then through PDF (auto). Presentations with slides off: through PDF, or as pptx with native."},
+        "picture_text": {"type": "boolean", "default": True,
+                         "description": "The text docling finds inside a picture of a page (pictograms and their labels, a diagram's words) right under it, a line for each block, in reading order."},
         "slides": {"type": "boolean", "default": True,
                    "description": "Presentations (pptx, ppt, odp) slide by slide: a section per slide, titled by its title or its first line, with its speaker notes; footers and pictures on more than half the slides left out. Off: as office says."},
         "notes": {"type": "boolean", "default": True, "description": "With slides: a slide's speaker notes under it."},
@@ -157,6 +181,9 @@ CONVERT_OUTPUT = {
                 "properties": {"name": {"type": "string"}, "page": {"type": "integer"}, "caption": {"type": "string"}},
             },
         },
+        "office_used": {"type": "string", "enum": ["native", "pdf"],
+                        "description": "A document that office concerns: read as docx or pptx (native), or through PDF (pdf)."},
+        "office_reason": {"type": "string", "description": "Why it went that way."},
     },
 }
 
@@ -204,6 +231,7 @@ CONVERT_TOOL_INPUT = {
         "images_scale": {"type": "number", "minimum": 0.5, "maximum": 4},
         "pdf_backend": {"type": "string", "enum": list(PDF_BACKENDS)},
         "office": {"type": "string", "enum": list(OFFICE_MODES)},
+        "picture_text": {"type": "boolean"},
         "slides": {"type": "boolean"},
         "notes": {"type": "boolean"},
         "slide_label": {"type": "string", "maxLength": 40},
@@ -270,6 +298,160 @@ def office_convert(path: pathlib.Path, into: str, target: str) -> pathlib.Path:
     if not got.is_file():
         raise ConvertError(f"{path.name}: LibreOffice could not turn it into {target} ({(r.stderr or r.stdout).strip()[-200:]})")
     return got
+
+
+_NS = {
+    "w": "http://schemas.openxmlformats.org/wordprocessingml/2006/main",
+    "wp": "http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing",
+    "a": "http://schemas.openxmlformats.org/drawingml/2006/main",
+    "pic": "http://schemas.openxmlformats.org/drawingml/2006/picture",
+    "wps": "http://schemas.microsoft.com/office/word/2010/wordprocessingShape",
+    "wpg": "http://schemas.microsoft.com/office/word/2010/wordprocessingGroup",
+    "wpc": "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas",
+    "mc": "http://schemas.openxmlformats.org/markup-compatibility/2006",
+    "v": "urn:schemas-microsoft-com:vml",
+    "w10": "urn:schemas-microsoft-com:office:word",
+}
+
+
+def _tag(name: str) -> str:
+    prefix, _, local = name.partition(":")
+    return "{%s}%s" % (_NS[prefix], local)
+
+
+_P, _TXBX, _FALLBACK = _tag("w:p"), _tag("w:txbxContent"), _tag("mc:Fallback")
+_PIC, _IMAGEDATA, _WSP, _ANCHOR = _tag("pic:pic"), _tag("v:imagedata"), _tag("wps:wsp"), _tag("wp:anchor")
+_GROUPS = {_tag("wpg:wgp"), _tag("wpc:wpc"), _tag("v:group")}
+_VML_SHAPES = {_tag("v:" + k) for k in ("shape", "rect", "roundrect", "oval", "line", "polyline", "curve", "arc")}
+_EMU_CM = 360000
+_VML_CM = {"pt": 2.54 / 72, "in": 2.54, "cm": 1.0, "mm": 0.1, "px": 2.54 / 96, "": 2.54 / 72}
+
+
+def _vml_cm(style: str, key: str) -> float:
+    m = re.search(r"(?:^|;)\s*%s\s*:\s*(-?[\d.]+)\s*(pt|in|cm|mm|px|)\s*(?:;|$)" % key, style or "")
+    return float(m.group(1)) * _VML_CM[m.group(2)] if m else 0.0
+
+
+def _picture_cm(el) -> float:
+    """A picture's longer side in centimetres; unknown, as large as a figure."""
+    if el.tag == _PIC:
+        ext = el.find("pic:spPr/a:xfrm/a:ext", _NS)
+        if ext is not None:
+            try:
+                return max(int(ext.get("cx", 0)), int(ext.get("cy", 0))) / _EMU_CM
+            except ValueError:
+                pass
+        return FIGURE_MIN_CM
+    style = el.get("style", "")
+    return max(_vml_cm(style, "width"), _vml_cm(style, "height")) or FIGURE_MIN_CM
+
+
+def _holds_picture(el) -> bool:
+    return any(True for _ in el.iter(_PIC)) or any(True for _ in el.iter(_IMAGEDATA))
+
+
+def _is_drawing(el) -> bool:
+    """A shape, a line or a text box: not a picture, nor a frame that holds one."""
+    if el.tag in _VML_SHAPES and el.find("v:imagedata", _NS) is not None:
+        return False
+    return (el.tag == _WSP or el.tag in _VML_SHAPES) and not any(_holds_picture(t) for t in el.iter(_TXBX))
+
+
+def _paragraph_drawings(p) -> tuple[list[float], bool, bool]:
+    """A body paragraph's pictures (their sizes, those of the frames anchored
+    there among them), whether a drawing floats over the text there (no
+    wrapping, or behind it), and whether a group or a canvas there holds a
+    picture and a drawing."""
+    sizes = [_picture_cm(el) for el in p.iter() if el.tag == _PIC or (el.tag in _VML_SHAPES and el.find("v:imagedata", _NS) is not None)]
+    floating = False
+    for anchor in p.iter(_ANCHOR):
+        if anchor.find("wp:wrapNone", _NS) is not None or anchor.get("behindDoc") in ("1", "true", "on"):
+            floating = floating or any(_is_drawing(el) for el in anchor.iter(_WSP))
+    for el in p.iter():
+        if el.tag in _VML_SHAPES and _is_drawing(el):
+            style = el.get("style", "").replace(" ", "")
+            wrap = el.find("w10:wrap", _NS)
+            if "position:absolute" in style and (wrap is None or wrap.get("type") in (None, "none")):
+                floating = True
+    grouped = any(_holds_picture(g) and any(_is_drawing(el) for el in g.iter()) for g in p.iter() if g.tag in _GROUPS)
+    return sizes, floating, grouped
+
+
+def office_drawings(docx) -> tuple[bool, str]:
+    """Whether a Word document goes through PDF with office: auto, and why.
+    It does when drawings sit over at least a third of its figures: shapes,
+    lines and arrows, text boxes, grouped with a picture or on a drawing
+    canvas with one, or floating over the text (no wrapping) in the
+    paragraph that holds a picture, or in the one before or after it. The
+    figures are the pictures of FIGURE_MIN_CM and more, a picture in a frame
+    among them. docling's Word reader takes such a figure apart, which the
+    PDF keeps whole; a manual with numbered callouts on a few of its figures
+    stays native, which keeps its tables, its pictures in place and its
+    right-to-left text."""
+    from lxml import etree
+
+    # No entities, no network, no tree past libxml2's limits.
+    parser = etree.XMLParser(resolve_entities=False, no_network=True, remove_comments=True, remove_pis=True)
+    try:
+        with zipfile.ZipFile(docx) as z:
+            info = z.getinfo("word/document.xml")
+            if info.file_size > DOCX_XML_MAX:
+                return False, f"its text is over {DOCX_XML_MAX >> 20} MiB, its drawings were not looked at"
+            with z.open(info) as f:
+                root = etree.parse(f, parser).getroot()
+    except Exception as e:  # a docx LibreOffice may still read: through PDF
+        log.warning("the drawings of %s could not be read: %s", pathlib.Path(str(docx)).name, e)
+        return True, f"its drawings could not be read ({type(e).__name__})"
+    # Word writes a drawing twice, in the markup of 2010 and in VML for the
+    # readers before it (mc:Fallback): the copy does not count.
+    for parent in list(root.iter()):
+        for child in [c for c in parent if c.tag == _FALLBACK]:
+            parent.remove(child)
+    # The body's paragraphs, those of the tables among them; a text box's
+    # paragraphs belong to the paragraph that anchors it.
+    paragraphs, stack = [], [root]
+    while stack:
+        el = stack.pop()
+        if el.tag == _P:
+            paragraphs.append(el)
+        else:
+            stack.extend(reversed(list(el)))
+    found = [_paragraph_drawings(p) for p in paragraphs]
+    figures = drawn = 0
+    for i, (sizes, _, grouped) in enumerate(found):
+        if not (grouped or any(s >= FIGURE_MIN_CM for s in sizes)):
+            continue
+        figures += 1
+        if grouped or any(found[j][1] for j in range(max(0, i - 1), min(len(found), i + 2))):
+            drawn += 1
+    if not figures:
+        return False, "no figures"
+    if not drawn:
+        return False, f"no drawings over its {figures} figures" if figures > 1 else "no drawings over its figure"
+    said = f"drawings over {drawn} of its {figures} figures"
+    if drawn >= figures * DRAWN_SHARE:
+        return True, said
+    return False, said + ", under a third"
+
+
+def office_source(path: pathlib.Path, ext: str, office: str, into: str) -> tuple[pathlib.Path, str, str]:
+    """The file docling reads for a Word document, or a presentation read
+    without slides, as office says (auto, pdf, native), made by LibreOffice
+    in the folder into; and the way it took, native or pdf, and why."""
+    native = OFFICE[ext][0] if ext in OFFICE else None  # docx or pptx
+    if office == "native" or not SOFFICE:
+        reason = "office: native" if office == "native" else "no LibreOffice to make a PDF"
+        return (office_convert(path, into, native) if native else path), "native", reason
+    if office == "pdf":
+        return office_convert(path, into, "pdf"), "pdf", "office: pdf"
+    if ext not in WORD:
+        # A slide drawn with shapes and arrows stays whole through PDF.
+        return office_convert(path, into, "pdf"), "pdf", "a presentation without slides goes through PDF"
+    docx = office_convert(path, into, "docx") if native else path
+    pdf, reason = office_drawings(docx)
+    if pdf:
+        return office_convert(path, into, "pdf"), "pdf", reason
+    return docx, "native", reason
 
 
 def one_line(text: str) -> str:
@@ -363,11 +545,173 @@ def slides_markdown(doc, source, notes: bool, slide_label: str, notes_label: str
     return "\n\n".join(out), next((t for t in titles.values() if t), "")
 
 
-def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, max_pages: int, scale: float, backend: str = "pypdfium", slides: dict | None = None) -> tuple[dict, list[tuple[str, bytes]]]:
+def md_line(text: str) -> str:
+    """A line of a picture's text in markdown: escaped as docling escapes
+    its text, and not read as a heading, a list item or a rule."""
+    s = md_text(text)
+    m = re.match(r"(#{1,6}|[-+*]|\d{1,9}[.)])(?=\s|$)", s)
+    if m:
+        mark = m.group(1)
+        s = (mark[:-1] + "\\" + mark[-1] if mark[0].isdigit() else "\\" + mark) + s[len(mark):]
+    elif re.fullmatch(r"[-=_*](?: *[-=_*]){2,}", s):
+        s = "\\" + s
+    return s
+
+
+def _xy_gaps(boxes: list, lo: int, hi: int) -> tuple[list, list[float]]:
+    """The boxes sorted along an axis (lo, hi: their sides), and the gap
+    before each one after the first, from the furthest end before it
+    (negative where they overlap)."""
+    boxes = sorted(boxes, key=lambda b: b[lo])
+    gaps, end = [], boxes[0][hi]
+    for b in boxes[1:]:
+        gaps.append(b[lo] - end)
+        end = max(end, b[hi])
+    return boxes, gaps
+
+
+def _split(boxes: list, gaps: list[float], least: float) -> list[list]:
+    parts = [[boxes[0]]]
+    for b, gap in zip(boxes[1:], gaps):
+        if gap >= least:
+            parts.append([])
+        parts[-1].append(b)
+    return parts
+
+
+def picture_lines(item, doc) -> list[str]:
+    """The text docling found inside a picture of a page, which its markdown
+    leaves out: the text layer's or the OCR's lines that fall in the
+    picture, which docling keeps as its children. Pieces side by side make
+    a line; lines one under the other, close and aligned (a label on two
+    lines), a block; the blocks come in reading order, a line each, cut
+    by the widest gaps between them: two columns of labels one after the
+    other, a row of boxes left to right (right to left in Arabic and
+    Hebrew). A block without letters is left out. Nothing when the picture
+    holds fewer than PICTURE_TEXT_MIN_WORDS words of two letters or more,
+    or is a chart, most of its blocks numbers."""
+    skip = {r.cref for r in (*item.captions, *item.footnotes)}
+    boxes, todo = [], list(item.children)
+    while todo:
+        ref = todo.pop()
+        if ref.cref in skip:
+            continue
+        child = ref.resolve(doc)
+        todo.extend(child.children)
+        text = one_line(getattr(child, "text", "") or "")
+        if not text or not getattr(child, "prov", None):
+            continue
+        prov = child.prov[0]
+        page = doc.pages.get(prov.page_no)
+        bb = prov.bbox.to_top_left_origin(page.size.height) if page is not None else prov.bbox
+        boxes.append((bb.l, min(bb.t, bb.b), bb.r, max(bb.t, bb.b), text))
+    if len(re.findall(r"[^\W\d_]{2,}", " ".join(b[4] for b in boxes))) < PICTURE_TEXT_MIN_WORDS:
+        return []
+
+    def height(b):
+        return max(b[3] - b[1], 1.0)
+
+    # Right-to-left writing (Arabic, Hebrew): a line's pieces and the
+    # columns go from the right.
+    letters = [unicodedata.bidirectional(c) for b in boxes for c in b[4] if c.isalpha()]
+    rtl = sum(k in ("R", "AL") for k in letters) * 2 > len(letters)
+
+    def same_row(b, row) -> bool:
+        h, small = max(height(b), height(row)), min(height(b), height(row))
+        overlap = min(b[3], row[3]) - max(b[1], row[1])
+        gap = max(b[0] - row[2], row[0] - b[2])
+        if gap < -0.5 * small:
+            return False
+        # A mark beside a word (an apostrophe, a degree sign), or words of a
+        # like size, however justified the line, not the next column's.
+        return (overlap >= 0.3 * small and gap <= 0.5 * h) or (overlap >= 0.5 * small and gap <= 3 * h and small >= 0.75 * h)
+
+    # Pieces on the same line: a line.
+    rows: list[list] = []
+    for b in sorted(boxes, key=lambda b: (b[1], b[0])):
+        for row in rows:
+            if same_row(b, row[0]):
+                row[0] = (min(b[0], row[0][0]), min(b[1], row[0][1]), max(b[2], row[0][2]), max(b[3], row[0][3]), "")
+                row.append(b)
+                break
+        else:
+            rows.append([(b[0], b[1], b[2], b[3], ""), b])
+    lines = []
+    for row in rows:
+        pieces = sorted(row[1:], key=lambda b: -b[2] if rtl else b[0])
+        text = pieces[0][4]
+        for prev, b in zip(pieces, pieces[1:]):
+            gap = prev[0] - b[2] if rtl else b[0] - prev[2]
+            text += (" " if gap >= 0.3 * max(height(prev), height(b)) else "") + b[4]
+        lines.append((*row[0][:4], text))
+
+    # Lines one under the other, close and aligned: a block.
+    blocks: list[list] = []
+    for line in sorted(lines, key=lambda b: (b[1], b[0])):
+        best = None
+        for block in blocks:
+            last = block[-1]
+            h = max(height(line), height(last))
+            gap = line[1] - last[3]
+            overlap = min(line[2], last[2]) - max(line[0], last[0])
+            if (-0.25 * h <= gap <= h and 2 / 3 <= height(line) / height(last) <= 1.5
+                    and (overlap >= 0.3 * min(line[2] - line[0], last[2] - last[0]) or abs(line[0] - last[0]) <= h)
+                    and (best is None or gap < best[0])):
+                best = (gap, block)
+        if best:
+            best[1].append(line)
+        else:
+            blocks.append([line])
+    merged = []
+    for block in blocks:
+        text = block[0][4]
+        for line in block[1:]:
+            if len(text) > 1 and text.endswith("-") and text[-2].isalpha() and line[4][:1].islower():
+                text = text[:-1] + line[4]  # a word split at the line's end
+            else:
+                text += " " + line[4]
+        merged.append((min(b[0] for b in block), block[0][1], max(b[2] for b in block), block[-1][3], text))
+    # A block without letters (a bar's value, an axis' tick, a callout's
+    # number) says nothing without the picture; a picture made mostly of
+    # them is a chart, which keeps none.
+    worded = [b for b in merged if any(c.isalpha() for c in b[4])]
+    if len(worded) * 2 < len(merged):
+        return []
+    merged = worded
+
+    # Reading order: cut at the widest gap, across (between columns, at
+    # least a line's height) or down (between rows), and again in each
+    # part. A gap across weighs twice: the columns of a page the picture
+    # swallowed are read one after the other, not row by row.
+    unit = sorted(height(b) for b in lines)[len(lines) // 2]
+    order, stack = [], [merged]
+    while stack:
+        group = stack.pop()
+        if len(group) == 1:
+            order.append(group[0])
+            continue
+        across, gaps_x = _xy_gaps(group, 0, 2)
+        down, gaps_y = _xy_gaps(group, 1, 3)
+        wide_x, wide_y = max(gaps_x), max(gaps_y)
+        if wide_x >= unit and 2 * wide_x >= wide_y:
+            parts = _split(across, gaps_x, wide_x)
+            if rtl:
+                parts.reverse()
+        elif wide_y > 0:
+            parts = _split(down, gaps_y, wide_y)
+        else:
+            order.extend(sorted(group, key=lambda b: (b[1], -b[2] if rtl else b[0])))
+            continue
+        stack.extend(reversed(parts))
+    return [md_line(b[4]) for b in order]
+
+
+def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, max_pages: int, scale: float, backend: str = "pypdfium", slides: dict | None = None, picture_text: bool = True) -> tuple[dict, list[tuple[str, bytes]]]:
     """Converts one document, its bytes or a file named as it: the structured
     result and the picture files. slides, for a pptx, holds slides_markdown's
-    notes, slide_label and notes_label."""
-    from docling.datamodel.base_models import DocumentStream
+    notes, slide_label and notes_label. picture_text writes the text inside
+    a picture of a page (a PDF's, an image's) under it."""
+    from docling.datamodel.base_models import DocumentStream, InputFormat
     from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 
     raw = source
@@ -384,6 +728,8 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         md, title = slides_markdown(doc, raw, **slides)
     else:
         md = doc.export_to_markdown(image_mode=ImageRefMode.PLACEHOLDER, image_placeholder=PLACEHOLDER)
+    # Only the pages docling lays out keep the text inside their pictures.
+    paged = picture_text and getattr(getattr(result, "input", None), "format", None) in (InputFormat.PDF, InputFormat.IMAGE)
     files: list[tuple[str, bytes]] = []
     shown: list[dict] = []
     tables = 0
@@ -400,6 +746,8 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         n += 1
         caption = item.caption_text(doc) or ""
         ref = ""
+        done = "".join(out)
+        in_cell = done[done.rfind("\n") + 1 :].lstrip().startswith("|")
         img = item.get_image(doc) if pictures else None
         if img is not None:
             fname = f"fig-{len(files) + 1}.png"
@@ -409,13 +757,17 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
             page = item.prov[0].page_no if item.prov else None
             shown.append({"name": fname, "page": page, "caption": caption})
             alt = caption.replace("[", "(").replace("]", ")").replace("\n", " ")
-            done = "".join(out)
-            if done[done.rfind("\n") + 1 :].lstrip().startswith("|"):
+            if in_cell:
                 # In a table's cell: on its line, or the table breaks.
                 ref = f" ![{alt}]({fname}) "
             else:
                 # A picture is a block of its own, not the tail of a list item.
                 ref = f"\n\n![{alt}]({fname})\n\n"
+        if paged and not in_cell:
+            # Its text right under it, which the markdown left out.
+            lines = picture_lines(item, doc)
+            if lines:
+                ref += "\n\n" + "\n\n".join(lines) + "\n\n"
         out.append(ref)
         out.append(parts[n])
     out.extend(parts[n + 1 :])
@@ -531,11 +883,12 @@ async def call_tool(name: str, arguments: dict):
         backend = str(arguments.get("pdf_backend") or "pypdfium")
         if backend not in PDF_BACKENDS:
             raise ConvertError(f"pdf_backend {backend!r}: {' or '.join(PDF_BACKENDS)}")
+        picture_text = arguments.get("picture_text") is not False
         async with _slots:
             ext = fname.rsplit(".", 1)[-1].lower()
-            office = str(arguments.get("office") or "pdf")
+            office = str(arguments.get("office") or "auto")
             if office not in OFFICE_MODES:
-                raise ConvertError(f"office {office!r}: {' or '.join(OFFICE_MODES)}")
+                raise ConvertError(f"office {office!r}: {', '.join(OFFICE_MODES)}")
             # A presentation goes slide by slide, as pptx: a PDF loses its notes.
             slides = None
             if ext in SLIDES and arguments.get("slides") is not False:
@@ -543,20 +896,22 @@ async def call_tool(name: str, arguments: dict):
                 for key, default in (("slide_label", "Slide"), ("notes_label", "Notes")):
                     got = arguments.get(key)
                     slides[key] = got[:40] if isinstance(got, str) else default
-            target = None
-            if office == "pdf" and ext in VIA_PDF and SOFFICE and slides is None:
-                target = "pdf"
-            elif ext in OFFICE:
-                target = OFFICE[ext][0]
-            if target:
+            way = None
+            if ext in WORD or (ext in SLIDES and slides is None) or ext in OFFICE:
                 if tmp is None:
                     tmp = tempfile.mkdtemp(prefix="docling-")
                 if isinstance(source, bytes):
                     path = pathlib.Path(tmp) / fname
                     path.write_bytes(source)
                     source = path
-                source = await anyio.to_thread.run_sync(office_convert, pathlib.Path(source), tmp, target)
-            result, files = await anyio.to_thread.run_sync(convert_sync, fname, source, cap, ocr, pictures, max_pages, scale, backend, slides)
+                if ext in WORD or (ext in SLIDES and slides is None):
+                    source, *way = await anyio.to_thread.run_sync(office_source, pathlib.Path(source), ext, office, tmp)
+                else:  # a spreadsheet, or a presentation slide by slide
+                    source = await anyio.to_thread.run_sync(office_convert, pathlib.Path(source), tmp, OFFICE[ext][0])
+            result, files = await anyio.to_thread.run_sync(convert_sync, fname, source, cap, ocr, pictures, max_pages, scale, backend, slides, picture_text)
+            if way:
+                result["office_used"], result["office_reason"] = way
+                log.info("%s went %s: %s", fname, *way)
     except ConvertError as e:
         return types.CallToolResult(content=[types.TextContent(type="text", text=str(e))], isError=True)
     finally:

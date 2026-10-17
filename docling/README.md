@@ -21,27 +21,63 @@ base64, which works as before, up to `DOCLING_MAX_BYTES`.
 | `max_pages` | 200 | convert the first pages only |
 | `images_scale` | 2 | the pictures' scale (1 = 72 dpi) |
 | `pdf_backend` | `pypdfium` | how a PDF's text is read: `pypdfium` (pypdfium2) or `docling` (docling-parse) |
-| `office` | `pdf` | documents (and presentations with `slides: false`): through LibreOffice to PDF (`pdf`), or read as docx and pptx (`native`) |
+| `office` | `auto` | documents (doc, docx, odt, rtf): read as docx unless drawings sit over their figures, then through PDF (`auto`); always as docx (`native`), always through LibreOffice to PDF (`pdf`). Presentations with `slides: false`: through PDF, as pptx with `native` |
+| `picture_text` | `true` | the text docling finds inside a picture of a page (pictograms and their labels, a diagram's words) right under the picture |
 | `slides` | `true` | presentations (pptx, ppt, odp) slide by slide, with their speaker notes; `false`: as `office` says |
 | `notes` | `true` | with `slides`: a slide's speaker notes under it |
 | `slide_label` | `Slide` | with `slides`: the word before a slide's number in its heading |
 | `notes_label` | `Notes` | with `slides`: the word before a slide's speaker notes |
 
-**Office documents** (since 0.3.0): documents (doc, docx, odt, rtf) go
-through LibreOffice to PDF, which docling then reads; about a second for a
-page. Presentations go slide by slide since 0.4.0 (below), and to PDF too
-with `slides: false`. Docling's Word reader takes apart a figure made of a
-picture, arrows and labelled boxes (the labels come out as lines of their
-own, the picture in pieces), and loses the text of the boxes; the PDF keeps
-the figure whole, as the page shows it, and its text is the document's own,
-not what a PDF printer drew. Spreadsheets (xls, ods, xlsx) go to xlsx,
-which docling reads as tables. `office: native` reads docx (and pptx, with
-`slides: false`) as they are and turns the older formats into them. The
-image has fonts for Latin, Greek, Cyrillic, Arabic and Hebrew (DejaVu,
+**Office documents** (since 0.3.0, `auto` since 0.5.0): documents (doc,
+docx, odt, rtf) are read by docling's Word reader, as docx (LibreOffice
+turns the older formats into docx), which keeps their tables, their
+pictures where they stand and their right-to-left text: on a benchmark of
+manuals the text came out 0.82 against 0.72 through PDF, the pictures in
+place 0.97-1.00 against 0.15, and Arabic whole where the PDF reversed its
+words. But the Word reader takes apart a figure made of a
+picture with shapes, arrows and text boxes drawn over it: the labels come
+out as lines of their own, the picture in pieces, the arrows lost. Such a
+document goes through LibreOffice to PDF, which keeps the figure whole, as
+the page shows it. With `office: auto` the plugin looks at the document's
+XML (the docx LibreOffice made, for the older formats): a figure is a
+picture of 2.5 cm or more (a frame's picture among them; an icon in a table
+is smaller), and drawings sit over it when a shape, a line or an arrow, or
+a text box, is grouped with it or on a drawing canvas with it (`wpg`,
+`wpc`, VML groups), or floats over the text, unwrapped, in its paragraph or
+in the one before or after it (`wps` shapes and text boxes, VML shapes,
+lines and text boxes). A document whose drawn figures are a third of its
+figures or more goes through PDF; a manual with numbered callouts on a few
+of its figures (5 of 30, say) stays native, and so does a document without
+figures. `office: pdf` and `office: native` force one way, as before. The
+result says the way taken, `office_used` (`native` or `pdf`), and
+`office_reason`: `drawings over 4 of its 5 figures`, `drawings over 5 of
+its 30 figures, under a third`, `no figures`, `office: pdf`. Through PDF,
+about a second a page. Presentations go slide by slide since 0.4.0 (below),
+and with `slides: false` through PDF, as pptx with `office: native`.
+Spreadsheets (xls, ods, xlsx) go to xlsx, which docling reads as tables.
+The image has fonts for Latin, Greek, Cyrillic, Arabic and Hebrew (DejaVu,
 Liberation) and for Chinese, Japanese and Korean (Noto CJK, since 0.4.1):
 a document in another script (Thai, the Indic ones) comes out of the PDF
 with its text right but its page drawn with empty boxes, which the OCR and
 the pictures see.
+
+**Text inside pictures** (since 0.5.0): docling's layout model sometimes
+takes a region with text in it for one picture, a table of pictograms with
+their labels, a diagram with its words, even a column of the page; its
+markdown then has the picture alone, and the text is lost. The plugin
+writes the text docling found inside the picture (the PDF's text layer, or
+the OCR's) right under it, a line for each block: pieces side by side make
+a line, lines one under the other, close and aligned, a block (a label on
+three lines is one line), and the blocks come in reading order, cut at the
+widest gap and again in each part, a gap between columns weighing twice
+one between rows: a column of the page the picture swallowed is read whole
+(columns go right to left in Arabic and Hebrew). A block without letters
+(a callout's number) is left out, and a picture gets none when it holds
+fewer than four words of two letters or more (a photo with a stray letter,
+a logo), or when most of its blocks are numbers (a chart, its values and
+its axes). It concerns the pages docling lays out: PDFs, images, and
+documents and presentations that go through PDF. `picture_text: false`
+leaves it out.
 
 **Presentations** (since 0.4.0): pptx, and ppt and odp turned into pptx by
 LibreOffice, are read by docling's pptx reader and written slide by slide,
@@ -83,7 +119,8 @@ headings. `pdf_backend: docling` brings docling-parse back for a document.
 Output: `markdown` (a picture is `![caption](fig-N.png)`; in a table's
 cell, on its line), `title` (of a presentation, its first slide's),
 `pages` (of a presentation, its slides), `tables`, `pictures` (`name`,
-`page`, `caption`), and from gosidian `files` (`name`, `path`, `mime`,
+`page`, `caption`), for a document `office` concerns `office_used` and
+`office_reason`, and from gosidian `files` (`name`, `path`, `mime`,
 `markdown`).
 
 ## Running it
@@ -91,7 +128,7 @@ cell, on its line), `title` (of a presentation, its first slide's),
 ```yaml
 services:
   gosidian-docling:
-    image: ghcr.io/daniele-chiappa/gosidian-docling:0.4.1
+    image: ghcr.io/daniele-chiappa/gosidian-docling:0.5.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${DOCLING_TOKEN:?}
@@ -119,15 +156,17 @@ of a compose file, set gosidian's `[pipelines] files_url` (or
 the other, not through a proxy in front of gosidian.
 
 Versions 0.2.0 (`file_refs`, `network`), 0.3.0 (`pdf_backend`,
-`office`, the office kinds) and 0.4.0 (`slides`, `notes`, `slide_label`,
-`notes_label`) change the manifest: the owner accepts it again, `gosidian
-plugin show docling` then `gosidian plugin accept docling <sha>`. The
+`office`, the office kinds), 0.4.0 (`slides`, `notes`, `slide_label`,
+`notes_label`) and 0.5.0 (`office: auto`, `picture_text`, `office_used`,
+`office_reason`) change the manifest: the owner accepts it again,
+`gosidian plugin show docling` then `gosidian plugin accept docling
+<sha>`. The
 image of 0.3.0 is about 600 MB larger, for LibreOffice.
 
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.4.1 -t gosidian-docling:0.4.1 docling/
+docker build --build-arg VERSION=0.5.0 -t gosidian-docling:0.5.0 docling/
 ```
 
 The image is built for amd64 only (about 5 GB: torch on the CPU, the
@@ -139,10 +178,15 @@ models and LibreOffice).
 sh docling/scripts/test.sh
 ```
 
-They make decks with python-pptx and read them slide by slide, in
-`python:3.12-slim` with docling's pptx reader (`docling-slim`) at the
-image's versions, not the image: titles, notes, footers, logos, a chart and
-the labels.
+They make decks with python-pptx and read them slide by slide, and Word
+documents with python-docx and the XML of their drawings, in
+`python:3.12-slim` with docling's pptx and docx readers (`docling-slim`) at
+the image's versions, not the image: titles, notes, footers, logos, a
+chart and the labels of the slides; the way `office: auto` takes for a
+figure with an arrow and a label over it, a group, a canvas, VML, a frame,
+a wrapped text box, a manual with callouts on one figure in six, icons;
+and the text of a picture, on a page built as docling's PDF pipeline
+leaves it, in its order.
 
 ## Licenses
 

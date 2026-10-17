@@ -1,6 +1,6 @@
 name: docling
-# A PR, or a push that touches docling/, checks the server and tests its
-# slides. A tag docling/vX.Y.Z builds its image (amd64, about 5 GB), tries
+# A PR, or a push that touches docling/, checks the server and runs its
+# tests. A tag docling/vX.Y.Z builds its image (amd64, about 5 GB), tries
 # it, pushes it to GHCR as :X.Y.Z and :latest, and makes the release with
 # its section of docling/CHANGELOG.md.
 
@@ -32,9 +32,9 @@ jobs:
       - name: Compile
         run: docker run --rm -v "$PWD/docling:/src:ro" python:3.12-slim python -X pycache_prefix=/tmp -m py_compile /src/server.py
 
-      - name: Test the slides
-        # Decks made by the tests with python-pptx, read by docling's pptx
-        # reader: docling-slim, not the image.
+      - name: Test the slides, the Word documents and the text of pictures
+        # Decks and docx made by the tests with python-pptx and python-docx,
+        # read by docling's pptx and docx readers: docling-slim, not the image.
         run: sh docling/scripts/test.sh
 
   image:
@@ -113,6 +113,22 @@ jobs:
           fonts = {f for b in blobs for f in re.findall(rb'/BaseFont\s*/(?:[A-Z]{6}\+)?([A-Za-z0-9_.-]+)', b)}
           assert any(b'CJK' in f for f in fonts), fonts
           print('cjk fonts', sorted(f.decode() for f in fonts))
+          "
+          # office: auto reads a plain docx natively, and says so.
+          docker exec -e HOME=/tmp docling-smoke python -c "
+          import base64, io, json, urllib.request
+          from docx import Document
+          d = Document(); d.add_heading('A plain document', 1); d.add_paragraph('Nothing is drawn over a picture here.')
+          b = io.BytesIO(); d.save(b)
+          args = {'file': {'name': 'plain.docx', 'mime': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'data': base64.b64encode(b.getvalue()).decode()}}
+          req = urllib.request.Request('http://127.0.0.1:8000/mcp', method='POST',
+              data=json.dumps({'jsonrpc': '2.0', 'id': 2, 'method': 'tools/call', 'params': {'name': 'convert', 'arguments': args}}).encode(),
+              headers={'Authorization': 'Bearer smoke', 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18'})
+          r = json.load(urllib.request.urlopen(req, timeout=300))['result']
+          assert not r.get('isError'), r
+          o = r['structuredContent']
+          assert o.get('office_used') == 'native' and 'A plain document' in o['markdown'], {k: o.get(k) for k in ('office_used', 'office_reason')}
+          print('office auto:', o['office_used'], '-', o.get('office_reason'))
           "
 
       - name: Login to GHCR

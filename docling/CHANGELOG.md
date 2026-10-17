@@ -4,6 +4,57 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.0] — 2026-10-17
+
+Word documents read as docx by default, unless drawings sit over their
+figures, and the text inside a picture of a page under it. The default
+of `office` changes from `pdf` to `auto`; the manifest changes (a setting,
+a value of `office`, two fields of the output), and the owner accepts it
+again.
+
+### Added
+- **`office: auto`**, the new default: a document (doc, docx, odt, rtf) is
+  read by docling's Word reader, as docx (LibreOffice turns the older
+  formats into docx), unless drawings sit over a third or more of its
+  figures; then it goes through LibreOffice to PDF, as `office: pdf`
+  sent every document until now. The plugin looks for them in the
+  document's XML: shapes, lines and arrows, text boxes, grouped with a
+  picture or on a drawing canvas with one (`wpg`, `wpc`, VML groups), or
+  floating over the text, unwrapped, in the paragraph of a picture or the
+  one before or after it (`wps`, VML shapes and lines); a figure is a
+  picture of 2.5 cm or more, a frame's among them. On a benchmark of
+  manuals the Word reader gave the text 0.82 against 0.72 through PDF,
+  the pictures in place 0.97-1.00 against 0.15, and Arabic whole where
+  the PDF reversed its words; but it takes apart a figure drawn over a
+  picture, which the PDF keeps whole. The manuals, with numbered callouts
+  on a fifth of their figures at most, now stay native. `office: pdf`
+  and `office: native` force one way, as before.
+- **`office_used`** and **`office_reason`** in the result, for a document
+  `office` concerns (and a presentation with `slides: false`): `native`
+  or `pdf`, and why (`drawings over 4 of its 5 figures`, `no figures`,
+  `office: pdf`).
+- **`picture_text`** (on by default): the text docling finds inside a
+  picture of a page, which its markdown left out, right under the
+  picture, a line for each block, in reading order. docling's layout model
+  sometimes takes a whole region for one picture, a table of pictograms
+  with their labels, a diagram, a column of the page: on one page of the
+  benchmark the text came out at 0.06, only the picture, and at 0.79 now.
+  A block without letters is left out; a picture with fewer than four
+  words (a photo, a logo), or made mostly of numbers (a chart), gets none.
+  PDFs, images, and the documents and presentations that go through PDF.
+- The tests of the Word documents and of the text inside pictures
+  (`test_office.py`, in `scripts/test.sh`): docx made with python-docx and
+  the XML of their drawings, read with docling-slim's Word reader.
+
+### Changed
+- **The default of `office`** is `auto`, no longer `pdf`: a pipeline that
+  wants every document through PDF, as before, says `office: pdf`. A
+  presentation with `slides: false` still goes through PDF with `auto`,
+  and as pptx with `native`.
+- `scripts/test.sh` installs docling-slim's Word reader too, and runs
+  both test files; the image's smoke test converts a plain docx with
+  `office: auto` and checks that it was read natively.
+
 ## [0.4.1] — 2026-10-17
 
 The fonts for Chinese, Japanese and Korean: an office document in these
