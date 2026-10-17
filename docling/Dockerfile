@@ -10,16 +10,22 @@ ENV PIP_NO_CACHE_DIR=1 \
     OMP_NUM_THREADS=4
 
 # LibreOffice turns doc, xls, ppt, rtf and the OpenDocument files into
-# docx, xlsx and pptx, which docling reads (about 600 MB more). The Noto
-# CJK fonts let it draw Chinese, Japanese and Korean (about 170 MB more):
-# without them a page through PDF shows empty boxes, which the OCR and the
-# pictures see. DejaVu draws Latin, Greek, Cyrillic, Arabic and Hebrew; the
-# build fails if a script of these has no font.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 \
-      libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui fonts-dejavu-core fonts-liberation2 \
-      fonts-noto-cjk \
+# docx, xlsx and pptx, which docling reads (about 600 MB more). It comes
+# from trixie-backports (26.8): the 25.2 of trixie grows without end on some
+# .doc files, past 12 GB, which 26.8 converts in a second; the build fails
+# on one older than 26. The Noto CJK fonts let it draw Chinese, Japanese
+# and Korean (about 170 MB more): without them a page through PDF shows
+# empty boxes, which the OCR and the pictures see. DejaVu draws Latin,
+# Greek, Cyrillic, Arabic and Hebrew; the build fails if a script of these
+# has no font.
+RUN echo "deb http://deb.debian.org/debian trixie-backports main" > /etc/apt/sources.list.d/backports.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 fonts-dejavu-core fonts-liberation2 fonts-noto-cjk \
+ && apt-get install -y --no-install-recommends -t trixie-backports \
+      libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
  && rm -rf /var/lib/apt/lists/* \
+ && v=$(dpkg-query -W -f '${Version}' libreoffice-core-nogui) \
+ && { dpkg --compare-versions "$v" ge 4:26 || { echo "LibreOffice $v is older than 26"; exit 1; }; } \
  && for l in zh ja ko ar el ru he; do fc-list ":lang=$l" | grep -q . || { echo "no font for $l"; exit 1; }; done
 
 # The CPU builds of torch: the CUDA ones are gigabytes the plugin never uses.

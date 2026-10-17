@@ -39,7 +39,8 @@ under `/usr/local/lib/python3.12/site-packages`, where `pip show` and
 
 The base is `python:3.12-slim`, Debian 13, with:
 
-- **LibreOffice** 25.2 (Writer, Calc and Impress without a GUI), which
+- **LibreOffice** 26.8, from trixie-backports (Writer, Calc and Impress
+  without a GUI), which
   turns the office formats into PDF or XLSX: MPL-2.0;
 - the fonts DejaVu (Bitstream Vera and public domain), Liberation 2
   (OFL-1.1), Noto CJK (OFL-1.1) and OpenSymbol;

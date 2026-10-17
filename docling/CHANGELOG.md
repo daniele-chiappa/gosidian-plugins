@@ -4,6 +4,28 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.1] — 2026-10-17
+
+LibreOffice 26.8, and a limit on its memory: a Word document LibreOffice
+cannot open no longer takes docling down with every conversion in
+flight. The manifest is the same but for the version.
+
+### Fixed
+- **LibreOffice without end on some .doc files**: the 25.2 of Debian 13
+  grew in memory on a few old Word documents (two of a set of about a
+  hundred manuals) until the container's limit, past 12 GB when it had
+  them, in any format it was asked for; the container restarted, and the
+  conversions in flight failed with it. LibreOffice now comes from
+  trixie-backports, 26.8, which converts the same files in a second or
+  two; the build fails on one older than 26.
+- The tests import `unittest.mock` one way only (CodeQL).
+
+### Added
+- **`DOCLING_OFFICE_MEMORY_MB`**, default 3072: LibreOffice runs under
+  `prlimit` with at most that much data, so a document past it fails
+  alone, with the limit in the error, and docling stays up. 0 turns it
+  off; without `prlimit` (the image has it) the plugin says so at start.
+
 ## [0.5.0] — 2026-10-17
 
 Word documents read as docx by default, unless drawings sit over their

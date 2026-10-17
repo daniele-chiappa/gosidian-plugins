@@ -16,7 +16,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest import mock
+import unittest.mock as mock
 
 from docx import Document
 from docx.oxml import parse_xml
@@ -347,6 +347,37 @@ class RouteTest(unittest.TestCase):
         r = asyncio.run(server.call_tool("convert", {"file": {"name": "a.docx", "data": base64.b64encode(plain()).decode()}, "office": "word"}))
         self.assertTrue(r.isError)
         self.assertIn("auto, pdf, native", r.content[0].text)
+
+
+class OfficeCommandTest(unittest.TestCase):
+    """LibreOffice under prlimit, with at most DOCLING_OFFICE_MEMORY_MB of data."""
+
+    def command(self, mb, prlimit="/usr/bin/prlimit"):
+        with mock.patch.object(server, "SOFFICE", "/usr/bin/soffice"), mock.patch.object(server, "PRLIMIT", prlimit), \
+                mock.patch.object(server, "OFFICE_MEMORY_MB", mb):
+            return server.office_command(pathlib.Path("/tmp/a/m.doc"), pathlib.Path("/tmp/a/office"), "docx", pathlib.Path("/tmp/a/lo-profile"))
+
+    def test_limited(self):
+        cmd = self.command(3072)
+        self.assertEqual(cmd[:3], ["/usr/bin/prlimit", f"--data={3072 << 20}", "--"])
+        self.assertEqual(cmd[3], "/usr/bin/soffice")
+        self.assertEqual(cmd[-1], "/tmp/a/m.doc")
+
+    def test_no_limit(self):
+        self.assertEqual(self.command(0)[0], "/usr/bin/soffice")
+        self.assertEqual(self.command(3072, prlimit=None)[0], "/usr/bin/soffice")
+
+    def test_a_document_past_the_limit_fails_alone(self):
+        import subprocess
+
+        done = subprocess.CompletedProcess([], 134, "", "terminate called after throwing an instance of 'std::bad_alloc'")
+        with tempfile.TemporaryDirectory() as into, mock.patch.object(server, "SOFFICE", "/usr/bin/soffice"), \
+                mock.patch.object(server, "PRLIMIT", "/usr/bin/prlimit"), mock.patch.object(server, "OFFICE_MEMORY_MB", 3072), \
+                mock.patch.object(server.subprocess, "run", return_value=done):
+            with self.assertRaises(server.ConvertError) as e:
+                server.office_convert(pathlib.Path(into) / "m.doc", into, "docx")
+        self.assertIn("exit 134, with at most 3072 MB (DOCLING_OFFICE_MEMORY_MB)", str(e.exception))
+        self.assertIn("bad_alloc", str(e.exception))
 
 
 class NativeTest(unittest.TestCase):

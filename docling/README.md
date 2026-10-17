@@ -128,7 +128,7 @@ cell, on its line), `title` (of a presentation, its first slide's),
 ```yaml
 services:
   gosidian-docling:
-    image: ghcr.io/daniele-chiappa/gosidian-docling:0.5.0
+    image: ghcr.io/daniele-chiappa/gosidian-docling:0.5.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${DOCLING_TOKEN:?}
@@ -145,6 +145,7 @@ services:
 | `DOCLING_MAX_PAGES` | 200 | the most pages converted |
 | `DOCLING_WORKERS` | 1 | documents converted at once (each takes 2-4 GB of memory) |
 | `DOCLING_OFFICE_TIMEOUT` | 120 | seconds LibreOffice may take on a document |
+| `DOCLING_OFFICE_MEMORY_MB` | 3072 | the memory LibreOffice may take on a document (its data, through `prlimit`): one past it fails alone, not the container; 0: no limit |
 | `PORT` | 8000 | MCP at `/mcp`, `GET /health` without a token |
 
 The models are in the image. The plugin reads no vault and calls nothing
@@ -166,7 +167,7 @@ image of 0.3.0 is about 600 MB larger, for LibreOffice.
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.5.0 -t gosidian-docling:0.5.0 docling/
+docker build --build-arg VERSION=0.5.1 -t gosidian-docling:0.5.1 docling/
 ```
 
 The image is built for amd64 only (about 5 GB: torch on the CPU, the

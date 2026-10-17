@@ -39,6 +39,7 @@ DOCLING_MAX_REF_BYTES  the largest document fetched by reference, default 512 Mi
 DOCLING_MAX_PAGES      the most pages converted, default 200
 DOCLING_WORKERS        conversions at once, default 1
 DOCLING_OFFICE_TIMEOUT seconds LibreOffice may take on a document, default 120
+DOCLING_OFFICE_MEMORY_MB the memory LibreOffice may take on a document, default 3072 (0: no limit)
 PORT                   default 8000
 """
 
@@ -74,15 +75,17 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.5.0")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.5.1")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
 MAX_PAGES = int(os.environ.get("DOCLING_MAX_PAGES", "200"))
 WORKERS = max(1, int(os.environ.get("DOCLING_WORKERS", "1")))
 OFFICE_TIMEOUT = int(os.environ.get("DOCLING_OFFICE_TIMEOUT", "120"))
+OFFICE_MEMORY_MB = int(os.environ.get("DOCLING_OFFICE_MEMORY_MB", "3072"))
 PORT = int(os.environ.get("PORT", "8000"))
 SOFFICE = shutil.which("soffice")
+PRLIMIT = shutil.which("prlimit")
 
 log = logging.getLogger("gosidian-docling")
 
@@ -289,15 +292,31 @@ def office_convert(path: pathlib.Path, into: str, target: str) -> pathlib.Path:
     profile = pathlib.Path(into) / "lo-profile"
     try:
         r = subprocess.run(
-            [SOFFICE, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore", "--convert-to", target, "--outdir", str(out), str(path)],
+            office_command(path, out, target, profile),
             capture_output=True, text=True, timeout=OFFICE_TIMEOUT,
         )
     except subprocess.TimeoutExpired:
         raise ConvertError(f"{path.name}: LibreOffice took more than {OFFICE_TIMEOUT} s") from None
     got = out / (path.stem + "." + target)
     if not got.is_file():
-        raise ConvertError(f"{path.name}: LibreOffice could not turn it into {target} ({(r.stderr or r.stdout).strip()[-200:]})")
+        limit = f", with at most {OFFICE_MEMORY_MB} MB (DOCLING_OFFICE_MEMORY_MB)" if office_limited() else ""
+        raise ConvertError(f"{path.name}: LibreOffice could not turn it into {target} (exit {r.returncode}{limit}: {(r.stderr or r.stdout).strip()[-200:]})")
     return got
+
+
+def office_limited() -> bool:
+    return OFFICE_MEMORY_MB > 0 and PRLIMIT is not None
+
+
+def office_command(path: pathlib.Path, out: pathlib.Path, target: str, profile: pathlib.Path) -> list[str]:
+    """LibreOffice's command, under prlimit when it has a memory limit: a
+    document it cannot open, which takes memory without end, then fails
+    alone, instead of taking the container's memory and every conversion in
+    flight with it."""
+    cmd = [SOFFICE, f"-env:UserInstallation={profile.as_uri()}", "--headless", "--norestore", "--convert-to", target, "--outdir", str(out), str(path)]
+    if office_limited():
+        cmd = [PRLIMIT, f"--data={OFFICE_MEMORY_MB << 20}", "--"] + cmd
+    return cmd
 
 
 _NS = {
@@ -970,6 +989,8 @@ async def lifespan(_app):
         # Load the models now, not at the first document.
         await anyio.to_thread.run_sync(converter, True, 2.0)
         log.info("gosidian-docling %s ready on :%d (token %s)", VERSION, PORT, "on" if TOKEN else "off")
+        if SOFFICE and OFFICE_MEMORY_MB > 0 and not PRLIMIT:
+            log.warning("no prlimit: LibreOffice runs without a memory limit")
         yield
 
 
