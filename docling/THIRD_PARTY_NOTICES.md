@@ -42,7 +42,7 @@ The base is `python:3.12-slim`, Debian 13, with:
 - **LibreOffice** 25.2 (Writer, Calc and Impress without a GUI), which
   turns the office formats into PDF or XLSX: MPL-2.0;
 - the fonts DejaVu (Bitstream Vera and public domain), Liberation 2
-  (OFL-1.1) and OpenSymbol;
+  (OFL-1.1), Noto CJK (OFL-1.1) and OpenSymbol;
 - the libraries they and Python need.
 
 Each Debian package's license is in `/usr/share/doc/<package>/copyright`.

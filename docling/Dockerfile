@@ -10,11 +10,17 @@ ENV PIP_NO_CACHE_DIR=1 \
     OMP_NUM_THREADS=4
 
 # LibreOffice turns doc, xls, ppt, rtf and the OpenDocument files into
-# docx, xlsx and pptx, which docling reads (about 600 MB more).
+# docx, xlsx and pptx, which docling reads (about 600 MB more). The Noto
+# CJK fonts let it draw Chinese, Japanese and Korean (about 170 MB more):
+# without them a page through PDF shows empty boxes, which the OCR and the
+# pictures see. DejaVu draws Latin, Greek, Cyrillic, Arabic and Hebrew; the
+# build fails if a script of these has no font.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 \
       libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui fonts-dejavu-core fonts-liberation2 \
- && rm -rf /var/lib/apt/lists/*
+      fonts-noto-cjk \
+ && rm -rf /var/lib/apt/lists/* \
+ && for l in zh ja ko ar el ru he; do fc-list ":lang=$l" | grep -q . || { echo "no font for $l"; exit 1; }; done
 
 # The CPU builds of torch: the CUDA ones are gigabytes the plugin never uses.
 RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 torchvision==0.29.0

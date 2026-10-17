@@ -4,6 +4,22 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.4.1] — 2026-10-17
+
+The fonts for Chinese, Japanese and Korean: an office document in these
+languages that goes through PDF now shows its characters on the page. The
+manifest is the same but for the version.
+
+### Fixed
+- **Chinese, Japanese and Korean drawn as empty boxes**: the image had no
+  font for them, so LibreOffice drew every character of a doc, docx or
+  pptx going to PDF as a box. The text docling read from the PDF was
+  right, but the OCR and the pictures saw boxes, and the pages broke
+  elsewhere (one manual took 30 pages instead of 35). The image now holds
+  the Noto CJK fonts (OFL-1.1, about 170 MB); the build fails if Chinese,
+  Japanese, Korean, Arabic, Greek, Cyrillic or Hebrew has no font. Thai
+  and the Indic scripts still have none.
+
 ## [0.4.0] — 2026-10-17
 
 Presentations slide by slide, with their titles and speaker notes, which

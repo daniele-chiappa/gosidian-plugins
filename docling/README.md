@@ -36,7 +36,12 @@ own, the picture in pieces), and loses the text of the boxes; the PDF keeps
 the figure whole, as the page shows it, and its text is the document's own,
 not what a PDF printer drew. Spreadsheets (xls, ods, xlsx) go to xlsx,
 which docling reads as tables. `office: native` reads docx (and pptx, with
-`slides: false`) as they are and turns the older formats into them.
+`slides: false`) as they are and turns the older formats into them. The
+image has fonts for Latin, Greek, Cyrillic, Arabic and Hebrew (DejaVu,
+Liberation) and for Chinese, Japanese and Korean (Noto CJK, since 0.4.1):
+a document in another script (Thai, the Indic ones) comes out of the PDF
+with its text right but its page drawn with empty boxes, which the OCR and
+the pictures see.
 
 **Presentations** (since 0.4.0): pptx, and ppt and odp turned into pptx by
 LibreOffice, are read by docling's pptx reader and written slide by slide,
@@ -86,7 +91,7 @@ cell, on its line), `title` (of a presentation, its first slide's),
 ```yaml
 services:
   gosidian-docling:
-    image: ghcr.io/daniele-chiappa/gosidian-docling:0.4.0
+    image: ghcr.io/daniele-chiappa/gosidian-docling:0.4.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${DOCLING_TOKEN:?}
@@ -122,7 +127,7 @@ image of 0.3.0 is about 600 MB larger, for LibreOffice.
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.4.0 -t gosidian-docling:0.4.0 docling/
+docker build --build-arg VERSION=0.4.1 -t gosidian-docling:0.4.1 docling/
 ```
 
 The image is built for amd64 only (about 5 GB: torch on the CPU, the

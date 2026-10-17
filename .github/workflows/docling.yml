@@ -96,6 +96,24 @@ jobs:
           print('manifest', m['version'])
           "
           docker exec docling-smoke test -s /licenses/THIRD_PARTY_NOTICES.md
+          # A docx in Chinese, Japanese and Korean through LibreOffice: the PDF
+          # must use a CJK font, not draw the characters as boxes.
+          docker exec -e HOME=/tmp docling-smoke python -c "
+          import re, subprocess, zlib
+          from docx import Document
+          d = Document(); d.add_paragraph('中文测试 日本語のテスト 한국어 시험'); d.save('/tmp/cjk.docx')
+          subprocess.run(['soffice', '-env:UserInstallation=file:///tmp/lo', '--headless', '--norestore', '--convert-to', 'pdf', '--outdir', '/tmp', '/tmp/cjk.docx'], check=True, capture_output=True)
+          data = open('/tmp/cjk.pdf', 'rb').read()
+          def z(b):
+              try:
+                  return zlib.decompress(b)
+              except Exception:
+                  return b''
+          blobs = [data] + [z(m.group(1)) for m in re.finditer(rb'stream\r?\n(.*?)endstream', data, re.S)]
+          fonts = {f for b in blobs for f in re.findall(rb'/BaseFont\s*/(?:[A-Z]{6}\+)?([A-Za-z0-9_.-]+)', b)}
+          assert any(b'CJK' in f for f in fonts), fonts
+          print('cjk fonts', sorted(f.decode() for f in fonts))
+          "
 
       - name: Login to GHCR
         # The docker CLI, not a third-party action.
