@@ -82,6 +82,22 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # ocr: Python packages (requirements.txt)
+  - package-ecosystem: "pip"
+    directory: "/ocr"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "ocr"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # pi: npm packages (pi itself among them)
   - package-ecosystem: "npm"
     directory: "/pi"
@@ -143,7 +159,7 @@ updates:
 
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi", "/claude", "/database", "/images"]
+    directories: ["/storage", "/docling", "/pi", "/claude", "/database", "/images", "/ocr"]
     schedule:
       interval: "weekly"
       day: "monday"

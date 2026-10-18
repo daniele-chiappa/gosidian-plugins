@@ -1,0 +1,127 @@
+name: ocr
+# A PR, or a push that touches ocr/, checks the server and runs its tests,
+# against a fake model's server. A tag ocr/vX.Y.Z builds its image (amd64,
+# about 300 MB: the model is not in it), tries it, pushes it to GHCR as
+# :X.Y.Z and :latest, and makes the release with its section of
+# ocr/CHANGELOG.md.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["ocr/**", ".github/workflows/ocr.yml"]
+    tags: ["ocr/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-ocr
+
+jobs:
+  check:
+    name: Test the OCR plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compile
+        run: docker run --rm -v "$PWD/ocr:/src:ro" python:3.12-slim python -X pycache_prefix=/tmp -m py_compile /src/server.py /src/test_ocr.py
+
+      - name: Test against a fake model's server
+        run: sh ocr/scripts/test.sh
+
+  image:
+    name: Build & push image
+    needs: [check]
+    if: startsWith(github.ref, 'refs/tags/ocr/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#ocr/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            ocr/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "ocr/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
+            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" ocr/
+          docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Try it
+        # No model's server here: the manifest, the server said unset, and a
+        # PDF's text layer read.
+        run: |
+          set -eu
+          docker run -d --name ocr-smoke --read-only --tmpfs /tmp:size=256m -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          for _ in $(seq 1 30); do
+            if docker exec ocr-smoke python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec ocr-smoke python -c "
+          import base64, io, json, urllib.request
+          from PIL import Image
+          def call(name, args):
+              req = urllib.request.Request('http://127.0.0.1:8000/mcp', method='POST',
+                  data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}).encode(),
+                  headers={'Authorization': 'Bearer smoke', 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18'})
+              return json.load(urllib.request.urlopen(req, timeout=30))['result']
+          m = call('gosidian_manifest', {})['structuredContent']
+          assert m['name'] == 'ocr' and m['gosidian'] == 1 and m['version'] == '${{ steps.meta.outputs.version }}', m
+          assert [n['name'] for n in m['nodes']] == ['convert', 'inspect'], m['nodes']
+          b = io.BytesIO(); Image.new('RGB', (200, 280), 'white').save(b, format='PDF')
+          r = call('inspect', {'file': {'name': 'blank.pdf', 'data': base64.b64encode(b.getvalue()).decode()}})['structuredContent']
+          assert r['server'] == 'unset' and r['pages'] == 1 and r['pages_without_text'] == [1], r
+          print('manifest', m['version'], '- inspect', r)
+          "
+          docker exec ocr-smoke test -s /licenses/THIRD_PARTY_NOTICES.md
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        run: |
+          docker push "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "ocr ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f ocr-smoke || true

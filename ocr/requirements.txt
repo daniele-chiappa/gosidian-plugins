@@ -1,0 +1,9 @@
+# The client of the OCR model: layout, then each block's content (Apache-2.0).
+mineru-vl-utils==2.0.5
+mcp==2.3.0
+httpx==0.28.1
+jsonschema==4.26.0
+uvicorn==0.54.0
+# A PDF's pages drawn for the model, and their text layer read.
+pypdfium2==5.13.0
+pillow==12.3.0
