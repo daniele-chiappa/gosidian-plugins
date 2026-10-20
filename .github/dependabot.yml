@@ -162,6 +162,30 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
+  # preview: npm packages. playwright-core follows the Playwright server it
+  # drives (a minor version apart, they refuse each other): only its patch
+  # releases are proposed; a minor one moves the server too, by hand.
+  - package-ecosystem: "npm"
+    directory: "/preview"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 5
+    labels: ["dependencies", "preview"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+    ignore:
+      # Node's types follow the image's Node, 24.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "playwright-core"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
   # agent-kit: npm packages (TypeScript and Node's types, for its tests)
   - package-ecosystem: "npm"
     directory: "/agent-kit"
@@ -199,7 +223,7 @@ updates:
 
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi", "/claude", "/exec", "/database", "/images", "/ocr"]
+    directories: ["/storage", "/docling", "/pi", "/claude", "/exec", "/database", "/images", "/ocr", "/preview"]
     schedule:
       interval: "weekly"
       day: "monday"

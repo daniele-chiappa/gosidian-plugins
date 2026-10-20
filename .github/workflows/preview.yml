@@ -1,0 +1,135 @@
+name: preview
+# A PR, or a push that touches preview/, tests the plugin, its check node
+# against a Playwright server of the version of playwright-core. A tag
+# preview/vX.Y.Z builds its image (amd64), checks it as it runs in
+# production (separation-test, beside a Playwright server, in Chromium,
+# Firefox and WebKit), pushes it to GHCR as :X.Y.Z and :latest, and makes
+# the release with its section of preview/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["preview/**", ".github/workflows/preview.yml"]
+    tags: ["preview/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-preview
+
+jobs:
+  test:
+    name: Test the preview plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: preview
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Start a Playwright server
+        # Microsoft's image at the version of playwright-core (client and
+        # server must match), on the runner's network: its browser reaches
+        # the tests' servers at 127.0.0.1. It starts while npm ci runs.
+        run: |
+          set -eu
+          V=$(node -p 'require("./package.json").dependencies["playwright-core"]')
+          docker run -d --name playwright --network host --init --shm-size=1g -e HOME=/tmp -e npm_config_update_notifier=false \
+            "mcr.microsoft.com/playwright:v$V-noble" npx -y "playwright@$V" run-server --port 3000 --host 127.0.0.1
+
+      - name: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Types
+        run: npm run check
+
+      - name: Wait for the Playwright server
+        run: |
+          for _ in $(seq 1 240); do
+            if docker logs playwright 2>&1 | grep -q "Listening on"; then exit 0; fi
+            sleep 1
+          done
+          docker logs playwright
+          exit 1
+
+      - name: Tests
+        # The zips, the HTTP server and the nodes; the check node in the
+        # Playwright server's Chromium.
+        env:
+          PREVIEW_TEST_PLAYWRIGHT_WS: ws://127.0.0.1:3000/
+          PREVIEW_TEST_HOST: 127.0.0.1
+        run: npm test
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/preview/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#preview/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            preview/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "preview/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
+            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" preview/
+          docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Try it as in production
+        run: IMAGE="${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" preview/scripts/separation-test.sh
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        run: |
+          docker push "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "preview ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"

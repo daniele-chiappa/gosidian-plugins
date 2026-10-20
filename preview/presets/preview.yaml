@@ -1,0 +1,41 @@
+# A preset of the preview plugin, every field with its default (or an
+# example). /etc/gosidian-preview/preset.yaml, or PREVIEW_PRESET. Without a
+# file there, the plugin runs with the defaults, named preview.
+name: preview                         # the plugin's name in gosidian: preview.publish, preview.check…
+description: Previews of the agents' web apps, and their checks with a browser
+
+# Where a person's browser and the Playwright server reach the previews'
+# port (8080), a path prefix allowed; default PREVIEW_PUBLIC_URL. Without
+# it, publish and check fail.
+# public_url: http://preview.lan:8085
+
+store_dir: /var/lib/gosidian-preview  # a volume, the user node's (1000)
+
+limits:
+  ttl: 7d                             # a preview's life when the node gives none: 3600, 90m, 12h, 3d
+  max_ttl: 30d                        # the most a node may ask
+  max_files: 2000                     # files in a zip (its entries, folders too, at most twice that)
+  max_bytes: 100MiB                   # a preview's bytes once unpacked (the zip itself: this and 8 MiB)
+  max_total_bytes: 2GiB               # the live previews together; past it, publish refuses
+  max_ratio: 100                      # unpacked over packed: the archive's, and each entry's over 1 MiB
+  max_depth: 16                       # folders a file may be in
+
+# The types served, by extension: the defaults below, and these added or
+# changed; null removes one. A zip with a file of another extension (or of
+# none: Makefile, .nojekyll) is refused, its files named.
+types:
+  pdf: application/pdf
+  # svg: null
+# The defaults: html htm (text/html), js mjs (text/javascript), css,
+# json map (application/json), txt, csv, xml, webmanifest, svg, png, jpg
+# jpeg, gif, webp, avif, ico, woff, woff2, ttf, wasm.
+
+# open: a preview's scripts call any host (fetch, XHR, WebSocket, EventSource);
+# self: only the preview's own files. Scripts, styles, images and fonts come
+# from the plugin's origin either way.
+connect: open
+
+playwright:
+  ws_endpoint: ws://preview.lan:4000/  # playwright run-server, version 1.61.x; default PREVIEW_PLAYWRIGHT_WS
+  timeout: 60s                          # a check's, when the node gives none
+  max_steps: 50                         # steps of a check
