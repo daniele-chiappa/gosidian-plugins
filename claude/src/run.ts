@@ -16,6 +16,7 @@ import { collect, fetchAll, refsOf, StepError, type OutFile } from "./files.ts";
 import { origin } from "./steps.ts";
 import { META, type MCPLevel } from "./kit/contract.ts";
 import { RepoError, Workspace, type RepoRequest } from "./kit/git.ts";
+import { killUser, signalGroup } from "./kit/signal.ts";
 import type { AnthropicProxy, Tokens } from "./proxy.ts";
 import type { Info, Subscription } from "./subscription.ts";
 import type { Prober, Versions } from "./versions.ts";
@@ -351,8 +352,9 @@ export function runClaude(o: RunOptions): Promise<ClaudeRun> {
     const stop = (why: string) => {
       if (st.limit) return;
       st.limit = why;
-      kill(child.pid, "SIGTERM");
-      stopping = setTimeout(() => kill(child.pid, "SIGKILL"), 3000);
+      // As the slot's user: root without CAP_KILL may not signal it.
+      signalGroup(child.pid, "SIGTERM", o.user);
+      stopping = setTimeout(() => signalGroup(child.pid, "SIGKILL", o.user), 3000);
     };
     const timer = setTimeout(() => stop("max_seconds"), Math.max(1, o.ms));
     const onAbort = () => stop("canceled");
@@ -388,25 +390,16 @@ export function runClaude(o: RunOptions): Promise<ClaudeRun> {
       clearTimeout(timer);
       if (stopping) clearTimeout(stopping);
       o.signal.removeEventListener("abort", onAbort);
-      kill(child.pid, "SIGKILL"); // what is left of its group
       // A tool's command may run in a group of its own: the slot's user
-      // stops all its processes.
-      if (o.user) spawnSync("/bin/sh", ["-c", "kill -9 -1 2>/dev/null; true"], { ...o.user, stdio: "ignore", timeout: 5000 });
+      // stops all its processes; without one, what is left of its group.
+      if (o.user) killUser(o.user);
+      else signalGroup(child.pid, "SIGKILL");
       st.exit = code;
       st.stderr = st.stderr.trim().split("\n").slice(-5).join(" ").slice(0, 600);
       resolve(st);
     });
     child.stdin.end(o.prompt);
   });
-}
-
-function kill(pid: number | undefined, sig: NodeJS.Signals): void {
-  if (!pid) return;
-  try {
-    process.kill(-pid, sig);
-  } catch {
-    // gone already
-  }
 }
 
 interface Dirs {

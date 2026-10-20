@@ -9,9 +9,11 @@
 # with a deploy key only root reads, and with gosidian's MCP (a fake), it
 # tries the key, the git folder, a commit and a push of its own, a hard link
 # to a file only root reads, the MCP token in a command line; then a hard
-# link the server must refuse to commit. The script fails if any of it
-# works, if the server's commit holds more than the agent's plain edit, or
-# if a step leaves its folder or a process.
+# link the server must refuse to commit; then a step that sleeps past its
+# max_seconds, which the server must stop at the limit. The script fails if
+# any of it works, if the server's commit holds more than the agent's plain
+# edit, if the step past its max_seconds runs on, or if a step leaves its
+# folder or a process.
 #
 #   claude/scripts/separation-test.sh                 build gosidian-claude:test, then test it
 #   IMAGE=gosidian-claude:0.1.0 claude/scripts/separation-test.sh

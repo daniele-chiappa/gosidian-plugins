@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { Repo } from "./repos.ts";
 import { exec } from "./exec.ts";
+import { knownHostsFile, sshCommand } from "./ssh.ts";
 
 export interface RepoRequest {
   name: string;
@@ -70,11 +71,6 @@ export function repoSettingSchema(repos: Repo[]): Record<string, unknown> {
   };
 }
 
-// shq quotes a word for the shell that runs GIT_SSH_COMMAND.
-function shq(s: string): string {
-  return `'${s.replaceAll("'", `'\\''`)}'`;
-}
-
 export class Workspace {
   readonly repo: Repo;
   readonly req: RepoRequest;
@@ -82,10 +78,12 @@ export class Workspace {
   readonly branch: string;
   readonly gitDir: string;
   readonly workTree: string;
+  // readOnly: a checkout (checkout), whose changes are never committed.
+  readonly readOnly: boolean;
   private readonly env: NodeJS.ProcessEnv;
   private readonly signal?: AbortSignal;
 
-  private constructor(repo: Repo, req: RepoRequest, base: string, branch: string, root: string, workTree: string, signal?: AbortSignal) {
+  private constructor(repo: Repo, req: RepoRequest, base: string, branch: string, root: string, workTree: string, signal?: AbortSignal, readOnly = false) {
     this.repo = repo;
     this.req = req;
     this.base = base;
@@ -93,6 +91,7 @@ export class Workspace {
     this.gitDir = path.join(root, "git");
     this.workTree = workTree;
     this.signal = signal;
+    this.readOnly = readOnly;
     // The server's own home for git and ssh: only it reads it.
     const home = path.join(root, "git-home");
     fs.mkdirSync(home, { mode: 0o700 });
@@ -104,16 +103,7 @@ export class Workspace {
       GIT_CONFIG_GLOBAL: "/dev/null",
       GIT_TERMINAL_PROMPT: "0",
     };
-    if (repo.key_file) {
-      const known = path.join(home, "known_hosts");
-      fs.writeFileSync(known, repo.known_hosts ?? "", { mode: 0o600 });
-      this.env.GIT_SSH_COMMAND = [
-        "ssh", "-F", "/dev/null", "-i", shq(repo.key_file),
-        "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-        "-o", "StrictHostKeyChecking=yes", "-o", `UserKnownHostsFile=${shq(known)}`, "-o", "GlobalKnownHostsFile=/dev/null",
-        "-o", "BatchMode=yes", "-o", "ConnectTimeout=20",
-      ].join(" ");
-    }
+    if (repo.key_file) this.env.GIT_SSH_COMMAND = sshCommand(repo.key_file, knownHostsFile(home, repo.known_hosts ?? ""));
   }
 
   // open clones repo into workTree (which must not exist) on base and
@@ -134,6 +124,40 @@ export class Workspace {
     return w;
   }
 
+  // checkout clones repo into workTree (which must not exist) at ref, a
+  // branch, a tag or a commit (default the repository's base), detached:
+  // a step that runs on the files, whose changes are never committed. The
+  // git folder goes in root, as with open.
+  static async checkout(repo: Repo, ref: string | undefined, o: { root: string; workTree: string; signal?: AbortSignal }): Promise<Workspace> {
+    const want = ref ?? repo.base;
+    if (want.startsWith("-") || !/^[\x21-\x7e]{1,255}$/.test(want)) throw new RepoError(`ref ${JSON.stringify(want)} is not a branch, a tag or a commit`);
+    const w = new Workspace(repo, { name: repo.name, push: false }, want, "", o.root, o.workTree, o.signal, true);
+    const depth = repo.depth > 0 ? [`--depth=${repo.depth}`] : [];
+    await w.git(["clone", "--quiet", "--no-checkout", `--separate-git-dir=${w.gitDir}`, ...depth, "--", repo.url, w.workTree], { bare: true });
+    await w.git(["checkout", "--quiet", "--detach", await w.resolve(want)]);
+    openUp(w.workTree);
+    return w;
+  }
+
+  // head is the commit the work tree is at.
+  async head(): Promise<string> {
+    return (await this.git(["rev-parse", "HEAD"])).trim();
+  }
+
+  // resolve gives the commit of ref: a branch of the remote, a tag, or a
+  // commit.
+  private async resolve(ref: string): Promise<string> {
+    for (const name of [`refs/remotes/origin/${ref}`, `refs/tags/${ref}`, ref]) {
+      try {
+        const sha = (await this.git(["rev-parse", "--verify", "--quiet", "--end-of-options", `${name}^{commit}`])).trim();
+        if (sha) return sha;
+      } catch {
+        // not this kind of ref
+      }
+    }
+    throw new RepoError(`repository ${this.repo.name} has no branch, tag or commit ${ref}`);
+  }
+
   // agentConfig is a git configuration for the agent's home: it may read
   // the repository (log, diff, status), which belongs to the server.
   agentConfig(): string {
@@ -143,6 +167,7 @@ export class Workspace {
   // finish commits what the agent changed, within the preset's limits,
   // pushes the branch and opens the pull request, as the request says.
   async finish(message: string): Promise<RepoOutput> {
+    if (this.readOnly) throw new RepoError(`repository ${this.repo.name} is a checkout: nothing is committed`);
     const out: RepoOutput = { name: this.repo.name, base: this.base, branch: this.branch, changed: 0, insertions: 0, deletions: 0, pushed: false };
     const { files, bytes } = await this.scan();
     if (files > this.repo.max_files) throw new RepoError(`${files} files changed, at most ${this.repo.max_files}: nothing committed`);

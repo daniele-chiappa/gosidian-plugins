@@ -1,15 +1,17 @@
 // The harness of separation-test.sh: a fake API, a fake MCP endpoint of
-// gosidian's, and three calls of run through MCP whose fake Claude Code runs
-// a shell command. The first looks for what it must not reach (the server's
-// environment, the token, a link to a file of the system) and leaves a
-// process behind. The second works on the preset's repository with
-// gosidian's MCP: it tries to read the deploy key, to write the git folder
-// (a hook, the configuration), to commit and push by itself, to move repo/,
-// to hard-link a file only root reads, and to find the MCP token in a
-// command line; then it edits a.txt, which the server commits. The third
-// hard-links a file of the repository, which the server refuses to commit.
-// It prints what the commands saw and exits non-zero if something leaked;
-// separation-test.sh then checks the repository.
+// gosidian's, and four calls of run through MCP. In the first three the
+// fake Claude Code runs a shell command. The first looks for what it must
+// not reach (the server's environment, the token, a link to a file of the
+// system) and leaves a process behind. The second works on the preset's
+// repository with gosidian's MCP: it tries to read the deploy key, to write
+// the git folder (a hook, the configuration), to commit and push by itself,
+// to move repo/, to hard-link a file only root reads, and to find the MCP
+// token in a command line; then it edits a.txt, which the server commits.
+// The third hard-links a file of the repository, which the server refuses
+// to commit. In the fourth the fake sleeps 30 s with a max_seconds of 3:
+// the server, root without CAP_KILL, must stop it at the limit. It prints
+// what the commands saw and exits non-zero if something leaked or ran on;
+// separation-test.sh then checks the repository and the processes left.
 import http from "node:http";
 import { mockAPI } from "/app/test/mock-api.ts";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -79,6 +81,11 @@ const meta = { "gosidian/project": "sep", "gosidian/run": "s1", "gosidian/mcp_ur
 const r2: any = await c.callTool({ name: "run", arguments: { prompt: "FAKE:" + JSON.stringify({ sh: attack, text: "edited a.txt" }), tools: ["Bash", "Read", "Write"], repo: { name: "app" }, mcp: "read" }, _meta: meta });
 const link = "ln repo/a.txt repo/a-link.txt && echo hi >> repo/a.txt";
 const r3: any = await c.callTool({ name: "run", arguments: { prompt: "FAKE:" + JSON.stringify({ sh: link, text: "linked" }), tools: ["Bash"], repo: { name: "app" } }, _meta: { "gosidian/run": "s2" } });
+// A step past its max_seconds: the server, root without CAP_KILL, must
+// stop the slot's Claude Code at the limit, not when it ends by itself.
+const t4 = Date.now();
+const r4: any = await c.callTool({ name: "run", arguments: { prompt: "FAKE:" + JSON.stringify({ sleep: 30, text: "late" }), max_seconds: 3 } });
+const took4 = (Date.now() - t4) / 1000;
 await c.close();
 await api.close();
 mcp.close();
@@ -115,9 +122,14 @@ if (JSON.stringify(r2).includes(MCP_TOKEN)) fail.push("the MCP token is in the a
 const said3 = String(r3.content?.[0]?.text ?? "");
 console.log("hard link:", said3);
 if (!r3.isError || !/a(-link)?\.txt is a hard link: nothing committed/.test(said3)) fail.push("a hard link in repo/ did not make the commit refuse");
+const said4 = String(r4.content?.[0]?.text ?? "");
+console.log(`max_seconds 3, a sleep of 30 s: ${took4.toFixed(1)} s: ${said4}`);
+if (!r4.isError || !/stopped at max_seconds \(3 s\)/.test(said4)) fail.push("a step past its max_seconds did not fail with max_seconds");
+if (took4 > 13) fail.push(`a step past its max_seconds (3 s) ran ${took4.toFixed(1)} s: the server could not stop Claude Code`);
 if (fail.length) {
   console.error("FAIL: " + fail.join("; "));
   process.exit(1);
 }
 console.log("ok: separate user, no secrets in reach, links refused, the proxy holds the token");
 console.log("ok: the repository's key and git folder out of reach, the server commits the plain edit, a hard link commits nothing; the MCP token in no command line");
+console.log("ok: a step past its max_seconds is stopped at the limit");

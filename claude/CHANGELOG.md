@@ -4,6 +4,23 @@ The changes of the `claude` plugin, newest first. A tag `claude/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-claude:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.2.1] — 2026-10-20
+
+A fix: a step's limits and the call's cancellation stop Claude Code at
+once. Nothing else changes for gosidian; the manifest is the same but for
+the version.
+
+### Fixed
+- **A step's limits and the call's cancellation stop Claude Code**:
+  `max_seconds`, `max_turns`, `max_tokens`, `max_cost` and a canceled call
+  sent their signal from the server, root without `CAP_KILL`, which may
+  not signal the slot's user: the signal failed, and Claude Code ran on
+  until it ended by itself; only the end of the step stopped what was
+  left. The server now sends it as the slot's user (agent-kit's
+  `signal.ts`), so Claude Code stops at the limit. The check of a new
+  version, run as nobody, is stopped at its time limit the same way. The
+  separation test runs a step past its `max_seconds`.
+
 ## [0.2.0] — 2026-10-20
 
 The run node keeps gosidian's common contract of the agents, `agent-run/1`,

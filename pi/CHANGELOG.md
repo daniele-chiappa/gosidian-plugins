@@ -4,6 +4,23 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.2.1] — 2026-10-20
+
+A fix: a step's limits and the call's cancellation stop pi at once.
+Nothing else changes for gosidian; the manifest is the same but for the
+version.
+
+### Fixed
+- **A step's limits and the call's cancellation stop pi**: `max_seconds`,
+  `max_turns`, `max_tokens`, `max_cost` and a canceled call sent their
+  signal from the server, root without `CAP_KILL`, which may not signal
+  the slot's user: the signal failed, and pi ran on until it ended by
+  itself; only the end of the step stopped what was left. The server now
+  sends it as the slot's user (agent-kit's `signal.ts`), so pi stops at
+  the limit. A call canceled between two runs of pi (a retry for the
+  JSON) stops the second at once. The separation test runs a step whose
+  bash sleeps past its `max_seconds`.
+
 ## [0.2.0] — 2026-10-20
 
 The run node keeps gosidian's common contract of the agents, `agent-run/1`:

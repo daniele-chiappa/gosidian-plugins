@@ -1,9 +1,10 @@
 // The harness of separation-test.sh: a fake endpoint that has the agent run
 // bash to look for what it must not reach, a fake of gosidian's MCP, and
 // calls of run through MCP: a step on its files, a step with gosidian's MCP,
-// two steps on a repository. It prints what the agent saw and exits
-// non-zero if something leaked; the branch a step pushed goes in
-// /out/branch, for the script to check on the git server.
+// two steps on a repository, a step whose bash runs past its max_seconds.
+// It prints what the agent saw and exits non-zero if something leaked or
+// ran on; the branch a step pushed goes in /out/branch, for the script to
+// check on the git server.
 import fs from "node:fs";
 import { mockLLM, type Reply } from "/app/test/mock-llm.ts";
 import { mockMCP } from "/app/test/mock-mcp.ts";
@@ -66,6 +67,8 @@ const scenarios: Record<string, Reply[]> = {
       "echo done-bash",
     ]),
   ],
+  // pi's bash runs a command longer than the step's max_seconds.
+  "max_seconds test": [bash(["sleep 30", "echo done-sleep"])],
 };
 
 const textOf = (m: any) => (typeof m?.content === "string" ? m.content : JSON.stringify(m?.content ?? ""));
@@ -146,6 +149,17 @@ console.log(s4);
 console.log("hard link:", h.isError ? h.content?.[0]?.text : JSON.stringify(h.structuredContent?.repo));
 if (!h.isError || !/is a hard link: nothing committed/.test(h.content?.[0]?.text ?? "")) fail.push("a hard link in repo/ did not stop the commit");
 
+// 5. A step past its max_seconds (bash sleeps 30 s, the limit is 3 s): the
+// server, root without CAP_KILL, stops the slot's pi at the limit, not
+// when it ends by itself.
+const t5 = Date.now();
+const x: any = await call({ prompt: "max_seconds test", tools: ["bash"], max_seconds: 3 });
+const took5 = (Date.now() - t5) / 1000;
+const said5 = String(x.content?.[0]?.text ?? "");
+console.log(`max_seconds 3, bash sleep 30: ${took5.toFixed(1)} s: ${said5}`);
+if (!x.isError || !/stopped at max_seconds \(3 s\)/.test(said5)) fail.push("a step past its max_seconds did not fail with max_seconds");
+if (took5 > 13) fail.push(`a step past its max_seconds (3 s) ran ${took5.toFixed(1)} s: the server could not stop pi`);
+
 await c.close();
 await llm.close();
 await mcp.close();
@@ -154,3 +168,4 @@ if (fail.length) {
   process.exit(1);
 }
 console.log("ok: separate user, no secrets in reach, links refused, gosidian's token in pi's environment only, the repository the server's");
+console.log("ok: a step past its max_seconds is stopped at the limit");

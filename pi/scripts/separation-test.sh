@@ -4,8 +4,10 @@
 # reach what it must not (the server's environment, the key, a link to a
 # file of the system, gosidian's token where it does not belong, the deploy
 # key and the git folder of a repository, a push of its own) and to leave a
-# process behind; the script fails if any of it works, if a hard link in the
-# repository is committed, or if a step leaves its folder or a process. A
+# process behind, then to run a command past the step's max_seconds; the
+# script fails if any of it works, if a hard link in the repository is
+# committed, if the step past its max_seconds is not stopped at the limit,
+# or if a step leaves its folder or a process. A
 # git server over SSH (sshd and git-shell, a deploy key made here) holds the
 # repository.
 #

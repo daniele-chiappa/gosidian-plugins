@@ -8,10 +8,11 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { Ajv } from "ajv";
 import { ACCESS, META, type Access, type MCPLevel } from "./kit/contract.ts";
 import { RepoError, Workspace, type RepoRequest } from "./kit/git.ts";
+import { killUser, signalGroup } from "./kit/signal.ts";
 import { accessTools, endpointOf, nodeSchema, type Effort, type MCPGrant, type Model, type Preset } from "./preset.ts";
 import { Lines, RunState, addUsage, noUsage, type Usage } from "./events.ts";
 import { check, correction, extractJSON, instructions, schemaError } from "./schema.ts";
@@ -533,11 +534,15 @@ function runPi(
     const stop = (why: string) => {
       if (st.limit) return;
       st.limit = why;
-      kill(child.pid, "SIGTERM");
-      stopping = setTimeout(() => kill(child.pid, "SIGKILL"), 3000);
+      // As the slot's user: root without CAP_KILL may not signal it.
+      signalGroup(child.pid, "SIGTERM", user);
+      stopping = setTimeout(() => signalGroup(child.pid, "SIGKILL", user), 3000);
     };
     const timer = setTimeout(() => stop("max_seconds"), left.ms);
     const onAbort = () => stop("canceled");
+    // A call canceled between two runs (a retry for the JSON) stops the
+    // next at once.
+    if (signal.aborted) onAbort();
     signal.addEventListener("abort", onAbort, { once: true });
     const lines = new Lines();
     const onLine = (line: string) => {
@@ -562,23 +567,15 @@ function runPi(
       clearTimeout(timer);
       if (stopping) clearTimeout(stopping);
       signal.removeEventListener("abort", onAbort);
-      kill(child.pid, "SIGKILL"); // what is left of its group
       // A tool's command runs in a group of its own (bash's background
-      // jobs too): the slot's user stops all its processes.
-      if (user) spawnSync("/bin/sh", ["-c", "kill -9 -1 2>/dev/null; true"], { ...user, stdio: "ignore", timeout: 5000 });
+      // jobs too): the slot's user stops all its processes; without one,
+      // what is left of its group.
+      if (user) killUser(user);
+      else signalGroup(child.pid, "SIGKILL");
       st.exit = code;
       st.stderr = st.stderr.trim().split("\n").slice(-5).join(" ").slice(0, 600);
       resolve(st);
     });
     child.stdin.end(prompt);
   });
-}
-
-function kill(pid: number | undefined, sig: NodeJS.Signals): void {
-  if (!pid) return;
-  try {
-    process.kill(-pid, sig);
-  } catch {
-    // gone already
-  }
 }

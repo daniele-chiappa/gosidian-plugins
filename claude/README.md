@@ -130,8 +130,10 @@ of its reach:
   the `SETUID` and `SETGID` capabilities. It runs Claude Code as the user
   of its slot (`agent1` to `agent8`, uid 10001 up), who reads neither the
   server's environment (the credential, the plugin's token) nor the files
-  only root reads. At the end of a step that user's processes are stopped,
-  those a tool left behind included.
+  only root reads. A limit of the step, or the call's cancellation, stops
+  Claude Code at once: the server, without `CAP_KILL`, signals it as that
+  user. At the end of a step that user's processes are stopped, those a
+  tool left behind included.
 - **The files given back are files.** A link in `out/` (made with Bash) is
   skipped: the server reads only regular files of one link.
 - **The repository's credentials never reach Claude Code.** The server
@@ -169,7 +171,7 @@ the server must refuse to commit.
 ```yaml
 services:
   claude:
-    image: ghcr.io/daniele-chiappa/gosidian-claude:0.2.0
+    image: ghcr.io/daniele-chiappa/gosidian-claude:0.2.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${CLAUDE_PLUGIN_TOKEN:?}
@@ -652,7 +654,7 @@ meanwhile waits for an install in progress, and fails with its reason.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.0 --build-context kit=agent-kit -t gosidian-claude:0.2.0 claude/
+docker build --build-arg VERSION=0.2.1 --build-context kit=agent-kit -t gosidian-claude:0.2.1 claude/
 claude/scripts/test.sh               # types and tests, in node:24-alpine
 claude/scripts/separation-test.sh    # the image as in production: users, secrets, links, leftovers
 TOKEN_FILE=… claude/scripts/smoke-test.sh   # the real Claude Code and API: install, probe, run, version, usage

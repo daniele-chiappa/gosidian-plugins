@@ -1,0 +1,26 @@
+{
+  "name": "gosidian-exec",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A gosidian plugin whose node runs a script or a command in its sandbox, or on a host of its preset over SSH",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node src/server.ts",
+    "test": "node --test --test-concurrency=1 \"test/*.test.ts\"",
+    "check": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.0",
+    "ajv": "8.20.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,7 @@
+name: exec-sep
+limits:
+  default: {timeout: 2m}
+cache: project
+repos:
+  - name: app
+    url: /repos/app.git

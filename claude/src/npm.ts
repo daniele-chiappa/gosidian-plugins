@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { PACKAGE, type Installer, type Registry } from "./versions.ts";
+import { signalGroup } from "./kit/signal.ts";
 
 export const NPM_REGISTRY = "https://registry.npmjs.org";
 
@@ -33,13 +34,16 @@ export interface ExecResult {
 // exec runs a command with only the environment given, as user (when the
 // server is root), and gives its output (1 MiB of each at most). A command
 // run as another user gets umask 000: the server, root without
-// CAP_DAC_OVERRIDE, can then remove what it leaves.
+// CAP_DAC_OVERRIDE, can then remove what it leaves. At its time limit its
+// process group is killed, as its user: root without CAP_KILL may not
+// signal another user's processes.
 export function exec(cmd: string, args: string[], opts: { env: Record<string, string>; cwd?: string; user?: { uid: number; gid: number }; timeoutMs: number; umask?: string }): Promise<ExecResult> {
   return new Promise((ok, fail) => {
     const child = spawn("/bin/sh", ["-c", `umask ${opts.umask ?? "022"} && exec "$0" "$@"`, cmd, ...args], {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
       ...(opts.user ?? {}),
     });
     let stdout = "";
@@ -50,7 +54,7 @@ export function exec(cmd: string, args: string[], opts: { env: Record<string, st
     child.stderr.on("data", (c: Buffer) => {
       if (stderr.length < 1 << 20) stderr += c.toString("utf8");
     });
-    const timer = setTimeout(() => child.kill("SIGKILL"), opts.timeoutMs);
+    const timer = setTimeout(() => signalGroup(child.pid, "SIGKILL", opts.user), opts.timeoutMs);
     child.on("error", (e) => {
       clearTimeout(timer);
       fail(e);

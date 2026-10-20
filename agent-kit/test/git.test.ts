@@ -11,6 +11,7 @@ import { execFileSync } from "node:child_process";
 import { parseRepos, hostsOf, isSSH } from "../repos.ts";
 import { Workspace, RepoError, redact } from "../git.ts";
 import { toolsFor } from "../contract.ts";
+import { knownHostsFile, sshOptions, sshCommand } from "../ssh.ts";
 
 const env = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", HOME: os.tmpdir() };
 const git = (cwd: string, ...args: string[]) =>
@@ -186,4 +187,43 @@ test("pull request on Gitea, with the plugin's token", async () => {
   } finally {
     api.close();
   }
+});
+
+test("checkout: a branch, a tag or a commit, detached; nothing is committed", async () => {
+  const bare = origin();
+  // A branch and a tag beyond main.
+  const seed = fs.mkdtempSync(path.join(os.tmpdir(), "seed2-"));
+  git(seed, "clone", "--quiet", bare, "w");
+  const w = path.join(seed, "w");
+  git(w, "checkout", "--quiet", "-b", "agent/r9-s1");
+  fs.writeFileSync(path.join(w, "branch.txt"), "on the branch\n");
+  git(w, "add", ".");
+  git(w, "commit", "--quiet", "-m", "branch");
+  git(w, "tag", "v1");
+  git(w, "push", "--quiet", "origin", "agent/r9-s1", "v1");
+  const branchSha = git(w, "rev-parse", "HEAD").trim();
+  const mainSha = git(bare, "rev-parse", "main").trim();
+  const repo = repoOf(bare);
+  for (const [ref, sha, has] of [["agent/r9-s1", branchSha, true], ["v1", branchSha, true], [mainSha, mainSha, false], [undefined, mainSha, false]] as const) {
+    const s = step();
+    const ws = await Workspace.checkout(repo, ref, s);
+    assert.equal(await ws.head(), sha, String(ref));
+    assert.equal(fs.existsSync(path.join(s.workTree, "branch.txt")), has, String(ref));
+    assert.equal(fs.statSync(path.join(s.workTree, "a.txt")).mode & 0o777, 0o666);
+    assert.equal(fs.statSync(ws.gitDir).mode & 0o022, 0);
+    fs.appendFileSync(path.join(s.workTree, "a.txt"), "changed\n");
+    await assert.rejects(ws.finish("no"), /is a checkout/);
+  }
+  await assert.rejects(Workspace.checkout(repo, "nope", step()), /no branch, tag or commit nope/);
+  await assert.rejects(Workspace.checkout(repo, "--upload-pack=x", step()), /not a branch, a tag or a commit/);
+});
+
+test("ssh: one key, the host keys pinned, nothing of a file or an agent", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ssh-"));
+  const known = knownHostsFile(dir, "host.example ssh-ed25519 AAAA");
+  assert.equal(fs.readFileSync(known, "utf8"), "host.example ssh-ed25519 AAAA\n");
+  assert.equal(fs.statSync(known).mode & 0o777, 0o600);
+  const opts = sshOptions("/keys/k", known);
+  for (const o of ["-F", "/dev/null", "IdentitiesOnly=yes", "IdentityAgent=none", "StrictHostKeyChecking=yes", "GlobalKnownHostsFile=/dev/null", "BatchMode=yes"]) assert.ok(opts.includes(o), o);
+  assert.match(sshCommand("/keys/it's", known), /^ssh -F '\/dev\/null' -i '\/keys\/it'\\''s' /);
 });

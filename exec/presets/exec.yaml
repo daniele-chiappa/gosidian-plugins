@@ -1,0 +1,45 @@
+# An executor for the gates of a team of agents: the tests and the build of
+# a branch an agent pushed, in the plugin's sandbox, with the network open
+# to the registries of the packages; and a host of the lab, over SSH, for
+# the operations a pipeline approves first.
+name: exec
+description: Tests, builds and operations of the agents' projects
+shell: bash                      # a local script's shell, with -e
+limits:
+  default:
+    timeout: 10m                 # seconds, or 90s, 10m, 1h
+    output_limit: 65536          # bytes of stdout and of stderr kept, their end
+    processes: 512               # processes and threads of the step (ulimit -u)
+    file_size: 2048              # MiB of a file it writes (ulimit -f)
+    # cpu_seconds: 30m           # CPU seconds of a process (ulimit -t); default the timeout
+  max:
+    timeout: 30m
+    output_limit: 262144
+    processes: 2048              # a node may ask up to this
+env:                             # every local step's variables
+  GOPROXY: https://proxy.golang.org,direct
+  GOTOOLCHAIN: local             # no other Go downloaded by a go.mod
+network:                         # the hosts the scripts reach: declared, the container enforces it
+  - registry.npmjs.org
+  - proxy.golang.org
+  - sum.golang.org
+  - pypi.org
+  - files.pythonhosted.org
+cache: project                   # none (default): every step downloads its dependencies
+cache_dir: /var/cache/gosidian-exec
+repos:                           # the repositories a step may check out, read-only
+  - name: sandbox
+    url: git@git.example.com:agents/sandbox.git
+    key_file: /run/secrets/sandbox_deploy_key   # root's, mode 600; a read-only deploy key is enough
+    known_hosts: "git.example.com ssh-ed25519 AAAA…"   # checked out of band
+    base: main
+hosts:                           # the hosts a step may run on, over SSH
+  - name: lab
+    host: lab.example.com
+    port: 22
+    user: gosidian               # a user of its own, with the least rights the work needs
+    key_file: /run/secrets/lab_key              # root's, mode 600
+    known_hosts: "lab.example.com ssh-ed25519 AAAA…"   # checked out of band
+    workdir: /home/gosidian/steps              # where the steps' folders are made
+    shell: sh
+    env: {LANG: C.UTF-8}
