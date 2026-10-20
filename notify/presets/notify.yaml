@@ -1,0 +1,92 @@
+# A preset of the notify plugin: every field, with its default or an
+# example. /etc/gosidian-notify/preset.yaml, or NOTIFY_PRESET. The people's
+# addresses are here, not in the vault: a node names people, groups and
+# rooms, never an address. The credentials are files (mounted secrets).
+name: notify                          # the plugin's name in gosidian: notify.send, notify.ask…
+description: Notifications to the people of the pipelines, and their answers
+
+# Where a person's browser reaches the reply page (the port 8080): the LAN,
+# or a proxy. Default NOTIFY_PUBLIC_URL. Without it a question has no link,
+# only Telegram's buttons.
+public_url: http://notify.lan:8086
+
+# gosidian's web UI: a node's note becomes a link to it, and a question's
+# resume_url must be gosidian's. gosidian_api is where the plugin reaches
+# gosidian to hand it an answer (default gosidian_url).
+gosidian_url: https://gosidian.example.com
+gosidian_api: http://gosidian:8080
+
+time_zone: Europe/Rome                # of the quiet hours; default UTC
+store_dir: /var/lib/gosidian-notify   # a volume, the user node's (1000)
+
+channels:
+  telegram:
+    token_file: /run/secrets/telegram-bot-token   # BotFather's token
+    # api_url: https://api.telegram.org
+    poll: true                        # take the bot's updates (getUpdates) for the buttons: one consumer a bot
+    # poll_timeout: 50                # seconds a getUpdates waits
+  ntfy:
+    server: https://ntfy.example.com
+    token_file: /run/secrets/ntfy-token           # an access token (tk_…) that may write the topics
+  email:
+    host: smtp.example.com
+    port: 587
+    security: starttls                # starttls (default; 465: tls), tls, none (a relay on the LAN)
+    user_file: /run/secrets/smtp-user
+    password_file: /run/secrets/smtp-password
+    from: "gosidian <notify@example.com>"
+
+people:
+  alice:
+    telegram: 123456789               # her user id: her chat with the bot, and who presses a button
+    ntfy: alice-notify                # her topic
+    email: alice@example.com
+    quiet: "22:00-07:00"              # low and normal wait, then one digest; high and urgent pass
+  bob:
+    email: bob@example.com
+
+groups:
+  ops: [alice, bob]                   # @ops
+
+rooms:
+  team:                               # #team, #team/agents…
+    telegram:
+      chat: -1001234567890            # a supergroup with topics; the bot an admin that manages topics
+      topics: {agents: 15, releases: 12}
+      auto_topics: true               # a topic a node names (#team/errors) is made the first time
+      max_auto_topics: 50
+    ntfy: team-alerts                 # or {topic: team-alerts, topics: {errors: team-errors}}
+    # email: team@example.com
+    # quiet: "23:00-07:00"
+
+limits:
+  title: 200                          # characters
+  text: {telegram: 4000, ntfy: 3500, email: 20000}   # ntfy's in bytes
+  per_hour: {person: 30, room: 60, channel: 300}     # messages an hour; past them, failed
+  group_window: 10m                   # the same key to the same destination is counted, not sent again
+  expires: 24h                        # a question's wait, when the node gives none
+  max_expires: 7d
+  held: 100                           # held a destination in its quiet hours; past it, the oldest go
+
+# The texts the people read, English by default.
+strings:
+  lang: en
+  # page_title: "A question for you"
+  # answering_as: "Answering as {person}"
+  # open_link: "Open the link"
+  # recorded: "Recorded: {choice}. Thank you."
+  # decided: "Already decided by {person}: {choice}."
+  # expired: "This question has expired."
+  # withdrawn: "This question was withdrawn."
+  # not_found: "This link is not valid, or it has expired."
+  # not_allowed: "You cannot answer this question."
+  # answer: "Answer"
+  # answer_at: "Answer: {url}"
+  # outcome: "{choice}: {person}"
+  # outcome_expired: "Expired"
+  # outcome_withdrawn: "Withdrawn"
+  # digest: "{count} notifications while quiet"
+  # grouped: "{title} (+{count})"
+  # more: "… and {count} more"
+  # high: "[high]"
+  # urgent: "[URGENT]"

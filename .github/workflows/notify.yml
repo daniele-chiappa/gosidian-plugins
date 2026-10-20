@@ -1,0 +1,148 @@
+name: notify
+# A PR, or a push that touches notify/, tests the plugin, its channels
+# against a real ntfy server and a Mailpit SMTP (Telegram and gosidian are
+# fakes of the tests). A tag notify/vX.Y.Z builds its image (amd64), checks
+# it as it runs in production (separation-test, on a network with no way
+# out), pushes it to GHCR as :X.Y.Z and :latest, and makes the release with
+# its section of notify/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["notify/**", ".github/workflows/notify.yml"]
+    tags: ["notify/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-notify
+
+jobs:
+  test:
+    name: Test the notify plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: notify
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Start ntfy and Mailpit
+        # The images scripts/test.sh pins, on the runner's ports: ntfy with
+        # access control (deny-all, a user of the tests and its token),
+        # Mailpit asking for a user and a password. They start while npm ci
+        # runs.
+        run: |
+          set -eu
+          NTFY_IMAGE=$(sed -n 's/^NTFY_IMAGE=//p' scripts/test.sh)
+          MAILPIT_IMAGE=$(sed -n 's/^MAILPIT_IMAGE=//p' scripts/test.sh)
+          docker run -d --name ntfy -p 127.0.0.1:8090:80 \
+            -e NTFY_BASE_URL=http://127.0.0.1:8090 -e NTFY_LISTEN_HTTP=:80 -e NTFY_AUTH_FILE=/tmp/auth.db -e NTFY_AUTH_DEFAULT_ACCESS=deny-all \
+            "$NTFY_IMAGE" serve
+          docker run -d --name mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 \
+            -e MP_SMTP_AUTH="mailer:mailpit-test-pass" -e MP_SMTP_AUTH_ALLOW_INSECURE=true "$MAILPIT_IMAGE"
+
+      - name: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Types
+        run: npm run check
+
+      - name: ntfy's user and token
+        run: |
+          set -eu
+          for _ in $(seq 1 60); do
+            if docker exec ntfy ntfy user list >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec -e NTFY_PASSWORD=ntfy-test-pass ntfy ntfy user add notify-tests
+          docker exec ntfy ntfy access notify-tests 'notify-*' rw
+          TOKEN=$(docker exec ntfy ntfy token add notify-tests 2>&1 | grep -o 'tk_[a-z0-9]*' | head -1)
+          echo "::add-mask::$TOKEN"
+          echo "NOTIFY_TEST_NTFY_TOKEN=$TOKEN" >> "$GITHUB_ENV"
+
+      - name: Tests
+        # The preset, the nodes, quiet hours, grouping, caps, Telegram
+        # (a fake Bot API), the questions and the reply page, the secrets;
+        # ntfy and email against the servers above.
+        env:
+          NOTIFY_TEST_NTFY: http://127.0.0.1:8090
+          NOTIFY_TEST_SMTP: 127.0.0.1:1025
+          NOTIFY_TEST_MAILPIT: http://127.0.0.1:8025
+          NOTIFY_TEST_SMTP_USER: mailer
+          NOTIFY_TEST_SMTP_PASS: mailpit-test-pass
+        run: npm test
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/notify/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#notify/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            notify/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "notify/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
+            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" notify/
+          docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Try it as in production
+        run: IMAGE="${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" notify/scripts/separation-test.sh
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        run: |
+          docker push "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "notify ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
