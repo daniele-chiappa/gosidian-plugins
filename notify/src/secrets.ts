@@ -1,8 +1,8 @@
 // The channels' credentials, read from the files the preset names (mounted
 // secrets), never from the preset itself or a node. They stay in this
 // module: every text that leaves the plugin (a node's output, an error, a
-// log line) goes through redact, which takes out each of them and the key
-// of a resume address.
+// log line) goes through redact, which takes out each of them, the key
+// of a resume address and the ticket of a file gosidian handed.
 import fs from "node:fs";
 import type { Preset } from "./preset.ts";
 
@@ -20,12 +20,16 @@ export function remember(v: string): void {
   if (v && v.length >= 4) known.add(v);
 }
 
-// redact takes the secrets out of a text, and the key of an address like
-// gosidian's resume_url (?key=…).
+// redact takes the secrets out of a text, the key of an address like
+// gosidian's resume_url (?key=…) and the ticket of a file's
+// (/api/v1/run-files/<ticket>).
 export function redact(s: string): string {
   let t = String(s);
   for (const v of known) if (t.includes(v)) t = t.split(v).join("[secret]");
-  return t.replace(/([?&](?:key|token|access_token|auth)=)[^&\s"']+/gi, "$1[secret]").replace(/\/bot\d+:[A-Za-z0-9_-]+/g, "/bot[secret]");
+  return t
+    .replace(/([?&](?:key|token|access_token|auth)=)[^&\s"']+/gi, "$1[secret]")
+    .replace(/\/bot\d+:[A-Za-z0-9_-]+/g, "/bot[secret]")
+    .replace(/(\/run-files\/)[A-Za-z0-9_-]+/g, "$1[secret]");
 }
 
 // redactAll redacts every string in a value (a log's fields, an output).

@@ -1,9 +1,11 @@
 // Shared pieces of the tests: fakes of what the plugin talks to (the
-// Telegram Bot API with long polling, an ntfy server, an SMTP server,
-// gosidian's resume address), a preset with their addresses, the plugin
-// started on free ports with a clock the test moves, and its MCP client.
+// Telegram Bot API with long polling and its uploads, an ntfy server with
+// its attachments, an SMTP server, gosidian's resume address and its file
+// tickets), a preset with their addresses, the plugin started on free
+// ports with a clock the test moves, and its MCP client.
 import http from "node:http";
 import net from "node:net";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -53,24 +55,69 @@ async function serve(handler: http.RequestListener, at?: Listen): Promise<{ serv
   return { server, url: `http://${at?.name ?? "127.0.0.1"}:${(server.address() as AddressInfo).port}` };
 }
 
-function body(req: http.IncomingMessage): Promise<string> {
+function bytesOf(req: http.IncomingMessage): Promise<Buffer> {
   return new Promise((ok) => {
     const chunks: Buffer[] = [];
     req.on("data", (c) => chunks.push(c));
-    req.on("end", () => ok(Buffer.concat(chunks).toString("utf8")));
+    req.on("end", () => ok(Buffer.concat(chunks)));
   });
+}
+
+async function body(req: http.IncomingMessage): Promise<string> {
+  return (await bytesOf(req)).toString("utf8");
+}
+
+// The images of the tests: their first bytes are what the plugin looks at.
+export const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
+export const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]), Buffer.from("JFIF\0"), Buffer.alloc(64, 1), Buffer.from([0xff, 0xd9])]);
+export const WEBP = Buffer.concat([Buffer.from("RIFF"), Buffer.from([0x24, 0, 0, 0]), Buffer.from("WEBPVP8 "), Buffer.alloc(28, 2)]);
+export const GIF = Buffer.concat([Buffer.from("GIF89a"), Buffer.from([1, 0, 1, 0, 0x80, 0, 0]), Buffer.alloc(16, 3), Buffer.from(";")]);
+export const sha256 = (b: Buffer) => crypto.createHash("sha256").update(b).digest("hex");
+
+// An uploaded file, as a fake took it.
+export interface Upload {
+  name: string;
+  type: string;
+  data: Buffer;
+}
+
+// formOf reads a multipart/form-data body: its fields, and its files.
+async function formOf(data: Buffer, type: string): Promise<{ fields: Record<string, string>; files: Record<string, Upload> }> {
+  const fd = await new Response(new Uint8Array(data), { headers: { "content-type": type } }).formData();
+  const fields: Record<string, string> = {};
+  const files: Record<string, Upload> = {};
+  for (const [k, v] of fd.entries()) {
+    if (typeof v === "string") fields[k] = v;
+    else files[k] = { name: v.name, type: v.type, data: Buffer.from(await v.arrayBuffer()) };
+  }
+  return { fields, files };
+}
+
+// unword undoes RFC 2047 (=?UTF-8?B?…?= and =?UTF-8?Q?…?=), as ntfy does.
+export function unword(h: string | undefined): string | undefined {
+  if (h === undefined) return undefined;
+  return h.replace(/=\?utf-8\?([bq])\?([^?]*)\?=/gi, (_, enc: string, w: string) =>
+    enc.toLowerCase() === "b"
+      ? Buffer.from(w, "base64").toString("utf8")
+      : Buffer.from(w.replace(/_/g, " ").replace(/=([0-9A-F]{2})/gi, (_m, x) => String.fromCharCode(parseInt(x, 16))), "latin1").toString("utf8"),
+  );
 }
 
 export interface TgCall {
   method: string;
   body: any;
-  // sendMessage's: the message as the API gave it back.
+  // sendMessage's, sendPhoto's, sendDocument's: the message as the API
+  // gave it back.
   result?: { message_id: number; chat: { id: number } };
+  // An upload's: the request's content type, and its file.
+  type?: string;
+  file?: Upload;
 }
 
 // fakeTelegram is the Bot API as the plugin uses it: sendMessage,
-// createForumTopic, editMessageReplyMarkup, answerCallbackQuery and
-// getUpdates, whose long poll waits for an update pushed by the test.
+// sendPhoto and sendDocument (multipart, their file kept), createForumTopic,
+// editMessageReplyMarkup, answerCallbackQuery and getUpdates, whose long
+// poll waits for an update pushed by the test.
 export async function fakeTelegram(token = SECRETS.telegram_token, at?: Listen) {
   const calls: TgCall[] = [];
   const updates: any[] = [];
@@ -84,10 +131,23 @@ export async function fakeTelegram(token = SECRETS.telegram_token, at?: Listen) 
     const m = /^\/bot([^/]+)\/([A-Za-z]+)$/.exec(req.url ?? "");
     const reply = (status: number, j: unknown) => res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(j));
     if (!m || req.method !== "POST") return reply(404, { ok: false, error_code: 404, description: "Not Found" });
-    const b = JSON.parse((await body(req)) || "{}");
+    const raw = await bytesOf(req);
+    const type = String(req.headers["content-type"] ?? "");
+    let b: any;
+    let file: Upload | undefined;
+    if (type.startsWith("multipart/form-data")) {
+      // Fields come as text: made what a JSON call would give.
+      const f = await formOf(raw, type);
+      b = {};
+      for (const [k, v] of Object.entries(f.fields)) b[k] = k === "reply_markup" ? JSON.parse(v) : /^(chat_id|message_thread_id)$/.test(k) ? Number(v) : k === "disable_notification" ? v === "true" : v;
+      file = Object.values(f.files)[0];
+      for (const k of Object.keys(f.files)) b[k] = "<file>";
+    } else {
+      b = JSON.parse(raw.toString("utf8") || "{}");
+    }
     if (m[1] !== token) return reply(401, { ok: false, error_code: 401, description: "Unauthorized" });
     const method = m[2];
-    const call: TgCall = { method, body: b };
+    const call: TgCall = { method, body: b, ...(file ? { type, file } : {}) };
     if (method !== "getUpdates") calls.push(call);
     const f = fail[method]?.shift();
     if (f) return reply(f.code, { ok: false, error_code: f.code, description: f.description, ...(f.retry_after ? { parameters: { retry_after: f.retry_after } } : {}) });
@@ -95,6 +155,12 @@ export async function fakeTelegram(token = SECRETS.telegram_token, at?: Listen) 
       case "sendMessage":
         call.result = { message_id: nextMessage++, chat: { id: b.chat_id } };
         return reply(200, { ok: true, result: { ...call.result, ...(b.message_thread_id ? { message_thread_id: b.message_thread_id } : {}), text: b.text } });
+      case "sendPhoto":
+      case "sendDocument": {
+        if (!file) return reply(400, { ok: false, error_code: 400, description: "Bad Request: there is no photo in the request" });
+        call.result = { message_id: nextMessage++, chat: { id: b.chat_id } };
+        return reply(200, { ok: true, result: { ...call.result, ...(b.caption ? { caption: b.caption } : {}) } });
+      }
       case "createForumTopic":
         return reply(200, { ok: true, result: { message_thread_id: nextThread++, name: b.name, icon_color: 7322096 } });
       case "editMessageReplyMarkup":
@@ -146,23 +212,48 @@ export async function fakeTelegram(token = SECRETS.telegram_token, at?: Listen) 
   };
 }
 
-// fakeNtfy takes ntfy's JSON publishing, with a token.
+// fakeNtfy takes ntfy's JSON publishing, with a token, and a PUT of an
+// attachment to a topic, its fields in headers (RFC 2047); with
+// attachments off, a PUT is answered as ntfy does without an
+// attachment-cache-dir (400, 40014).
 export async function fakeNtfy(token = SECRETS.ntfy_token) {
   const messages: any[] = [];
-  const fail: { status: number; error: string }[] = [];
+  const fail: { status: number; error: string; code?: number }[] = [];
   const auth: string[] = [];
+  const puts: string[] = [];
+  const o = { attachments: true };
   const { server, url } = await serve(async (req, res) => {
-    const b = await body(req);
+    const raw = await bytesOf(req);
     auth.push(String(req.headers.authorization ?? ""));
-    if (req.method !== "POST" || req.url !== "/") return res.writeHead(404).end();
+    const put = req.method === "PUT" && /^\/[A-Za-z0-9_-]{1,64}$/.test(req.url ?? "");
+    if (!put && (req.method !== "POST" || req.url !== "/")) return res.writeHead(404).end();
     if (req.headers.authorization !== `Bearer ${token}`) return res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ code: 40301, http: 403, error: "forbidden" }));
+    if (put) puts.push(req.url!.slice(1));
     const f = fail.shift();
-    if (f) return res.writeHead(f.status, { "content-type": "application/json" }).end(JSON.stringify({ http: f.status, error: f.error }));
-    const m = JSON.parse(b);
+    if (f) return res.writeHead(f.status, { "content-type": "application/json" }).end(JSON.stringify({ ...(f.code ? { code: f.code } : {}), http: f.status, error: f.error }));
+    let m: any;
+    if (put) {
+      if (!o.attachments) return res.writeHead(400, { "content-type": "application/json" }).end(JSON.stringify({ code: 40014, http: 400, error: "invalid request: attachments not allowed" }));
+      const h = (k: string) => (req.headers[k] === undefined ? undefined : String(req.headers[k]));
+      const tags = unword(h("x-tags"));
+      const actions = unword(h("x-actions"));
+      m = {
+        topic: req.url!.slice(1),
+        message: unword(h("x-message")),
+        ...(h("x-title") ? { title: unword(h("x-title")) } : {}),
+        priority: Number(h("x-priority")),
+        ...(tags ? { tags: tags.split(",") } : {}),
+        ...(h("x-click") ? { click: unword(h("x-click")) } : {}),
+        ...(actions ? { actions: JSON.parse(actions) } : {}),
+        attachment: { name: h("x-filename"), type: h("content-type"), size: raw.length, data: raw },
+      };
+    } else {
+      m = JSON.parse(raw.toString("utf8"));
+    }
     messages.push(m);
-    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: `m${messages.length}`, event: "message", ...m }));
+    res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ id: `m${messages.length}`, event: "message", ...m, ...(m.attachment ? { attachment: { ...m.attachment, data: undefined } } : {}) }));
   });
-  return { url, messages, fail, auth, close: () => new Promise<void>((ok) => server.close(() => ok())) };
+  return { url, messages, fail, auth, puts, o, close: () => new Promise<void>((ok) => server.close(() => ok())) };
 }
 
 export interface Mail {
@@ -173,9 +264,12 @@ export interface Mail {
 }
 
 // smtpSink is an SMTP server that keeps what it gets: EHLO, AUTH PLAIN or
-// LOGIN (with the user and password given, when given), MAIL, RCPT, DATA.
+// LOGIN (with the user and password given, when given), MAIL, RCPT, DATA;
+// a message past o.max bytes (when set) is refused, 552, as a server with
+// a size limit does.
 export async function smtpSink(creds?: { user: string; pass: string }) {
   const mails: Mail[] = [];
+  const o = { max: 0, refused: 0 };
   const server = net.createServer((sock) => {
     let buf = "";
     let state: "cmd" | "data" | "plain" | "login-user" | "login-pass" = "cmd";
@@ -203,10 +297,15 @@ export async function smtpSink(creds?: { user: string; pass: string }) {
         buf = buf.slice(i + 2);
         if (state === "data") {
           if (line === ".") {
-            mails.push(cur);
+            if (o.max && cur.data.length > o.max) {
+              o.refused++;
+              w("552 5.3.4 Message size exceeds fixed maximum message size");
+            } else {
+              mails.push(cur);
+              w("250 2.0.0 OK queued");
+            }
             cur = { from: "", to: [], data: "", user: cur.user };
             state = "cmd";
-            w("250 2.0.0 OK queued");
           } else {
             cur.data += (line.startsWith("..") ? line.slice(1) : line) + "\r\n";
           }
@@ -282,7 +381,7 @@ export async function smtpSink(creds?: { user: string; pass: string }) {
     });
   });
   await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
-  return { port: (server.address() as AddressInfo).port, mails, close: () => new Promise<void>((ok) => server.close(() => ok())) };
+  return { port: (server.address() as AddressInfo).port, mails, o, close: () => new Promise<void>((ok) => server.close(() => ok())) };
 }
 
 // headersOf reads a mail's headers, unfolded, names in lower case.
@@ -307,24 +406,68 @@ export function words(h: string): string {
     );
 }
 
-// textOf is a mail's body, quoted-printable undone.
+// A part of a mail: its headers (names in lower case) and its body,
+// its transfer encoding undone.
+export interface Part {
+  headers: Record<string, string>;
+  data: Buffer;
+}
+
+function partOf(text: string): Part {
+  const i = text.indexOf("\r\n\r\n");
+  const head = (i < 0 ? text : text.slice(0, i)).replace(/\r\n[ \t]+/g, " ");
+  const raw = i < 0 ? "" : text.slice(i + 4);
+  const headers: Record<string, string> = {};
+  for (const l of head.split("\r\n")) {
+    const j = l.indexOf(":");
+    if (j > 0) headers[l.slice(0, j).toLowerCase()] = l.slice(j + 1).trim();
+  }
+  const enc = headers["content-transfer-encoding"] ?? "";
+  let data: Buffer;
+  if (/base64/i.test(enc)) data = Buffer.from(raw.replace(/\s+/g, ""), "base64");
+  else if (/quoted-printable/i.test(enc)) data = Buffer.from(raw.replace(/=\r\n/g, "").replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16))), "latin1");
+  else data = Buffer.from(raw, "utf8");
+  return { headers, data };
+}
+
+// partsOf is a mail's parts: itself when it is not multipart.
+export function partsOf(m: Mail): Part[] {
+  const whole = partOf(m.data);
+  const b = /boundary="?([^";]+)"?/i.exec(whole.headers["content-type"] ?? "")?.[1];
+  if (!/^multipart\//i.test(whole.headers["content-type"] ?? "") || !b) return [whole];
+  const body = m.data.slice(m.data.indexOf("\r\n\r\n") + 4);
+  return body
+    .split(`--${b}`)
+    .slice(1)
+    .filter((x) => !x.startsWith("--"))
+    .map((x) => partOf(x.replace(/^\r\n/, "").replace(/\r\n$/, "")));
+}
+
+// textOf is a mail's text: its text/plain part, its encoding undone.
 export function textOf(m: Mail): string {
-  const raw = m.data.split("\r\n\r\n").slice(1).join("\r\n\r\n");
-  const qp = /quoted-printable/i.test(headersOf(m)["content-transfer-encoding"] ?? "");
-  const b64 = /base64/i.test(headersOf(m)["content-transfer-encoding"] ?? "");
-  if (b64) return Buffer.from(raw.replace(/\s+/g, ""), "base64").toString("utf8");
-  if (!qp) return raw;
-  const bytes = raw.replace(/=\r\n/g, "").replace(/=([0-9A-F]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
-  return Buffer.from(bytes, "latin1").toString("utf8");
+  const parts = partsOf(m);
+  const t = parts.find((p) => /^text\/plain/i.test(p.headers["content-type"] ?? "text/plain")) ?? parts[0];
+  return t.data.toString("utf8").replace(/\r\n/g, "\n");
 }
 
 // fakeGosidian is gosidian's resume address: it keeps what a run got, and
-// answers what the test says (200 by default).
+// answers what the test says (200 by default); and its file tickets
+// (/api/v1/run-files/<ticket>), as a node with file_refs gets them: ref
+// hands a file, fetched counts the GETs of each ticket.
 export async function fakeGosidian(at?: Listen) {
   const resumes: { run: string; key: string; step: string | null; body: any }[] = [];
   const answers: number[] = [];
+  const files = new Map<string, Buffer>();
+  const fetched: string[] = [];
   const { server, url } = await serve(async (req, res) => {
     const u = new URL(req.url ?? "/", "http://x");
+    const t = /^\/api\/v1\/run-files\/([0-9a-f]{32})$/.exec(u.pathname);
+    if (t && req.method === "GET") {
+      fetched.push(t[1]);
+      const f = files.get(t[1]);
+      if (!f) return res.writeHead(404, { "content-type": "application/json" }).end(JSON.stringify({ error: { code: "not_found", message: "no such file ticket" } }));
+      return res.writeHead(200, { "content-type": "application/octet-stream", "content-length": String(f.length) }).end(f);
+    }
     const m = /^\/api\/v1\/runs\/([^/]+)\/resume$/.exec(u.pathname);
     const b = await body(req);
     if (!m || req.method !== "POST") return res.writeHead(404).end();
@@ -332,7 +475,22 @@ export async function fakeGosidian(at?: Listen) {
     if (status === 200) resumes.push({ run: m[1], key: u.searchParams.get("key") ?? "", step: u.searchParams.get("step"), body: JSON.parse(b) });
     res.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(status === 200 ? { run: { id: m[1], status: "running" } } : { error: { code: "conflict", message: "no step waits" } }));
   }, at);
-  return { url, resumes, answers, close: () => new Promise<void>((ok) => server.close(() => ok())) };
+  return {
+    url,
+    resumes,
+    answers,
+    files,
+    fetched,
+    // ref hands a file of the project as gosidian does, by reference; lie
+    // changes what the reference says.
+    ref(name: string, data: Buffer, lie: Record<string, unknown> = {}) {
+      const ticket = crypto.randomBytes(16).toString("hex");
+      files.set(ticket, data);
+      return { name, mime: "image/png", size: data.length, sha256: sha256(data), url: `${url}/api/v1/run-files/${ticket}`, ...lie };
+    },
+    ticketOf: (ref: { url: string }) => ref.url.split("/").pop()!,
+    close: () => new Promise<void>((ok) => server.close(() => ok())),
+  };
 }
 
 export const KEY = "0123456789abcdef".repeat(4);

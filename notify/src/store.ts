@@ -5,11 +5,14 @@
 // never the tokens), the answers still to hand gosidian, the Telegram
 // topics the bot made and the offset of its updates. It survives a
 // restart; a file that does not parse is set aside, and the plugin starts
-// empty.
+// empty. Beside it, images/: the image of each question held in quiet
+// hours (its SHA-256 its name, mode 600), until the question goes or
+// closes; gosidian's ticket for it lasts only while the step may run.
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import type { ChannelName, Priority } from "./preset.ts";
+import type { Image, ImageMeta } from "./image.ts";
 
 export interface Msg {
   project: string;
@@ -18,6 +21,8 @@ export interface Msg {
   link: string;
   priority: Priority;
   key?: string;
+  // image: the node's image, without its bytes (a digest says there was one).
+  image?: ImageMeta;
 }
 
 // Held is a message for a destination in its quiet hours, or a question
@@ -74,6 +79,8 @@ export interface Question {
   // outcome.
   telegram: { chat: number; message_id: number }[];
   closed?: number;
+  // image: the node's image; its bytes on the volume while it is held.
+  image?: ImageMeta;
 }
 
 export interface Resume {
@@ -135,9 +142,12 @@ function empty(): Data {
   return { v: 1, telegram_offset: 0, topics: {}, rates: {}, groups: {}, held: [], questions: {}, outbox: [] };
 }
 
+const SHA256 = /^[0-9a-f]{64}$/;
+
 export class Store {
   readonly dir: string;
   readonly file: string;
+  readonly images: string;
   data: Data = empty();
   private tokens = new Map<string, string>();
   private readonly log: (msg: string, f?: Record<string, unknown>) => void;
@@ -145,6 +155,7 @@ export class Store {
   constructor(dir: string, log: (msg: string, f?: Record<string, unknown>) => void = () => {}) {
     this.dir = dir;
     this.file = path.join(dir, "state.json");
+    this.images = path.join(dir, "images");
     this.log = log;
   }
 
@@ -176,6 +187,54 @@ export class Store {
     const tmp = `${this.file}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(this.data), { mode: 0o600 });
     fs.renameSync(tmp, this.file);
+  }
+
+  // putImage keeps an image's bytes on the volume, by its SHA-256.
+  putImage(i: Image): void {
+    if (!SHA256.test(i.sha256)) throw new Error("an image without its SHA-256");
+    fs.mkdirSync(this.images, { recursive: true, mode: 0o700 });
+    const file = path.join(this.images, i.sha256);
+    if (fs.existsSync(file)) return;
+    const tmp = `${file}.tmp`;
+    fs.writeFileSync(tmp, i.data, { mode: 0o600 });
+    fs.renameSync(tmp, file);
+  }
+
+  // image gives an image kept on the volume, its bytes checked, or
+  // undefined when it is not there (or not what it was).
+  image(m: ImageMeta): Image | undefined {
+    if (!SHA256.test(m.sha256)) return undefined;
+    let data: Buffer;
+    try {
+      data = fs.readFileSync(path.join(this.images, m.sha256));
+    } catch {
+      return undefined;
+    }
+    if (crypto.createHash("sha256").update(data).digest("hex") !== m.sha256) return undefined;
+    return { ...m, data };
+  }
+
+  // sweepImages removes the images no held question needs.
+  sweepImages(): void {
+    const keep = new Set<string>();
+    for (const h of this.data.held) {
+      const q = h.question ? this.data.questions[h.question] : undefined;
+      if (q?.image && q.status === "open") keep.add(q.image.sha256);
+    }
+    let names: string[];
+    try {
+      names = fs.readdirSync(this.images);
+    } catch {
+      return;
+    }
+    for (const n of names) {
+      if (keep.has(n)) continue;
+      try {
+        fs.rmSync(path.join(this.images, n), { force: true });
+      } catch (e) {
+        this.log("an image of the volume not removed", { error: (e as Error).message });
+      }
+    }
   }
 
   // token gives a person a token for a question: its hash is kept, the

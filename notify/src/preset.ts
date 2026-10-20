@@ -97,6 +97,8 @@ export interface Limits {
   // held: the messages kept for a destination in its quiet hours; past
   // it, the oldest go.
   held: number;
+  // image: the bytes of a node's image at most (with.image).
+  image: number;
 }
 
 export const DEFAULT_STRINGS = {
@@ -120,6 +122,7 @@ export const DEFAULT_STRINGS = {
   more: "… and {count} more",
   high: "[high]",
   urgent: "[URGENT]",
+  image: "[image]",
 };
 export type Strings = typeof DEFAULT_STRINGS;
 
@@ -152,6 +155,10 @@ const NTFY_TOPIC = "^[A-Za-z0-9_-]{1,64}$";
 const EMAIL = "^[^\\s@<>()\",;:\\\\\\[\\]]{1,64}@[A-Za-z0-9.-]{1,253}$";
 export const DEFAULT_STORE = "/var/lib/gosidian-notify";
 const DAY = 86400;
+const MiB = 2 ** 20;
+// The most limits.image may be: what Telegram takes of a file a bot sends
+// (50 MB; a photo, 10 MB, goes as a file past it).
+export const MAX_IMAGE = 50 * 10 ** 6;
 
 export const DEFAULT_LIMITS: Limits = {
   title: 200,
@@ -161,6 +168,7 @@ export const DEFAULT_LIMITS: Limits = {
   expires: DAY,
   max_expires: 7 * DAY,
   held: 100,
+  image: 8 * MiB,
 };
 
 const durationSchema = { type: ["integer", "string"] };
@@ -298,6 +306,7 @@ const presetSchema = {
         expires: durationSchema,
         max_expires: durationSchema,
         held: { type: "integer", minimum: 1, maximum: 10000 },
+        image: { type: ["integer", "string"] },
       },
     },
     strings: {
@@ -316,6 +325,24 @@ export function seconds(v: unknown, what: string): number {
   const n = Number(m[1]) * ({ s: 1, m: 60, h: 3600, d: DAY } as Record<string, number>)[m[2] ?? "s"];
   if (n <= 0) throw new Error(`${what}: the duration is zero`);
   return n;
+}
+
+// bytes reads a size: a number of bytes, or "512KiB", "8MiB", "10MB".
+export function bytes(v: unknown, what: string): number {
+  if (typeof v === "number" && Number.isInteger(v) && v > 0) return v;
+  const m = typeof v === "string" ? /^(\d+)\s*(B|KiB|MiB|GiB|KB|MB|GB)?$/.exec(v.trim()) : null;
+  if (!m) throw new Error(`${what}: ${JSON.stringify(v)} is not a size (bytes, or 512KiB, 8MiB, 10MB)`);
+  const unit = ({ B: 1, KiB: 2 ** 10, MiB: 2 ** 20, GiB: 2 ** 30, KB: 1e3, MB: 1e6, GB: 1e9 } as Record<string, number>)[m[2] ?? "B"];
+  const n = Number(m[1]) * unit;
+  if (n <= 0) throw new Error(`${what}: the size is zero`);
+  return n;
+}
+
+// formatBytes says a size in its largest binary unit.
+export function formatBytes(n: number): string {
+  if (n >= 2 ** 20) return `${Math.round((n / 2 ** 20) * 10) / 10} MiB`;
+  if (n >= 2 ** 10) return `${Math.round((n / 2 ** 10) * 10) / 10} KiB`;
+  return `${n} bytes`;
 }
 
 // formatDuration says a number of seconds in its largest whole unit.
@@ -469,7 +496,9 @@ export function parsePreset(text: string, file = "preset", env: Record<string, s
     expires: rl.expires !== undefined ? seconds(rl.expires, `${file}: limits.expires`) : DEFAULT_LIMITS.expires,
     max_expires: rl.max_expires !== undefined ? seconds(rl.max_expires, `${file}: limits.max_expires`) : DEFAULT_LIMITS.max_expires,
     held: rl.held ?? DEFAULT_LIMITS.held,
+    image: rl.image !== undefined ? bytes(rl.image, `${file}: limits.image`) : DEFAULT_LIMITS.image,
   };
+  if (limits.image < 1024 || limits.image > MAX_IMAGE) throw new Error(`${file}: limits.image ${formatBytes(limits.image)}: from 1 KiB to 50 MB (Telegram's most for a file)`);
   if (limits.expires > limits.max_expires) throw new Error(`${file}: limits.expires ${formatDuration(limits.expires)} is over limits.max_expires ${formatDuration(limits.max_expires)}`);
 
   const gosidian_url = httpURL(raw.gosidian_url ?? "", `${file}: gosidian_url`);

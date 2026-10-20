@@ -1,13 +1,15 @@
 // The plugin's nodes: send, ask, cancel. Each reads the call's project from
 // its _meta (gosidian/project): a question belongs to the project that asked
 // it, and only that project's calls withdraw it. Their settings name the
-// preset's destinations only; the text is made plain and cut.
+// preset's destinations only; the text is made plain and cut; an image is
+// a file of the project, which gosidian hands by reference (image.ts).
 import { Ajv } from "ajv";
-import { CHANNELS, formatDuration, PRIORITIES, seconds, type ChannelName, type Preset, type Priority } from "./preset.ts";
+import { CHANNELS, formatBytes, formatDuration, PRIORITIES, seconds, type ChannelName, type Preset, type Priority } from "./preset.ts";
 import { dispatch, NodeError, people, resolve, summary, type Entry, type Env } from "./dispatch.ts";
 import { answerers, cancel as cancelQuestion, close, questionOutgoing } from "./questions.ts";
 import { ID, newId, type Msg, type Question } from "./store.ts";
 import { capUnits, clean, linkError } from "./text.ts";
+import { fetchImage, metaOf, type Image } from "./image.ts";
 
 export { NodeError };
 
@@ -66,6 +68,11 @@ function common(p: Preset): Record<string, unknown> {
     note: { type: "string", maxLength: 1024, description: `A note of the project, relative to it: its link in gosidian's web UI${p.gosidian_url ? ` (${p.gosidian_url})` : " (the preset's gosidian_url)"}` },
     priority: { enum: [...PRIORITIES], default: "normal", description: "low (silent on Telegram), normal, high, urgent; in quiet hours low and normal wait for the digest" },
     channels: { type: "array", minItems: 1, uniqueItems: true, items: { enum: configured(p) }, description: "Only these of each destination's channels; default all of them" },
+    // As a pipeline writes it: gosidian hands the tool a reference instead.
+    image: {
+      description: `One image of the project, a vault path (an attachment, as preview.check's screenshot comes back): PNG, JPEG, WebP or GIF by its first bytes, at most ${formatBytes(p.limits.image)}. A photo on Telegram (the text its caption when it fits), an attachment on ntfy and email. The plugin fetches it from gosidian, by reference`,
+      anyOf: [{ type: "string", minLength: 1 }, { type: "object", required: ["path"] }, { type: "array", minItems: 1, maxItems: 1 }],
+    },
     require: { enum: ["any", "all"], default: "any", description: "any: the node fails only when nothing went (every channel failed); all: when a channel failed" },
   };
 }
@@ -113,6 +120,8 @@ const entrySchema = {
     channel: { type: ["string", "null"] },
     status: { enum: ["sent", "held", "grouped", "failed"] },
     error: { type: "string" },
+    image: { enum: ["sent", "dropped", "held"], description: "With an image: sent with the message; dropped, the message went (or will go) without it, note says why; held, kept for when the held question goes" },
+    note: { type: "string" },
   },
 };
 const sentSchema = {
@@ -142,10 +151,18 @@ export const outputSchemas = {
 const ajv = new Ajv({ allErrors: true, useDefaults: true, strict: false, allowUnionTypes: true });
 const validators = new WeakMap<Preset, Record<string, (v: unknown) => boolean>>();
 
+// toolSchemas are the schemas of the tools gosidian calls: an image is a
+// reference by then ({name, mime, size, sha256, url}), which image.ts reads.
+export function toolSchemas(p: Preset): Record<string, Record<string, unknown>> {
+  const s: Record<string, any> = structuredClone(inputSchemas(p));
+  for (const n of ["send", "ask"]) s[n].properties.image = { description: s[n].properties.image.description };
+  return s;
+}
+
 function settings(p: Preset, node: string, args: Record<string, unknown>): any {
   let v = validators.get(p);
   if (!v) {
-    const s = inputSchemas(p);
+    const s = toolSchemas(p);
     v = { send: ajv.compile(s.send), ask: ajv.compile(s.ask), cancel: ajv.compile(s.cancel) };
     validators.set(p, v);
   }
@@ -212,6 +229,12 @@ function message(p: Preset, s: any, project: string): Msg {
   return { project, title, text, link, priority: (s.priority ?? "normal") as Priority, ...(s.key ? { key: s.key } : {}) };
 }
 
+// image fetches a node's image, when it has one.
+async function image(p: Preset, s: any, signal?: AbortSignal): Promise<Image | undefined> {
+  if (s.image === undefined || s.image === null) return undefined;
+  return fetchImage(p, s.image, signal);
+}
+
 // verdict applies require: the error that fails the node, or "".
 function verdict(entries: Entry[], require: "any" | "all"): string {
   const failed = entries.filter((e) => e.status === "failed");
@@ -223,7 +246,9 @@ function verdict(entries: Entry[], require: "any" | "all"): string {
 
 function said(entries: Entry[]): string {
   const c = summary(entries);
-  return (["sent", "held", "grouped", "failed"] as const).filter((k) => c[k]).map((k) => `${c[k]} ${k}`).join(", ") || "nothing";
+  const out = (["sent", "held", "grouped", "failed"] as const).filter((k) => c[k]).map((k) => `${c[k]} ${k}`).join(", ") || "nothing";
+  const dropped = entries.filter((e) => e.image === "dropped").length;
+  return dropped ? `${out}; ${dropped} without the image` : out;
 }
 
 // --- the nodes ---
@@ -233,10 +258,12 @@ export async function send(env: Env, args: Record<string, unknown>, meta: Record
   const s = settings(env.preset, "send", args);
   const dests = resolve(env, list(s.to));
   const msg = message(env.preset, s, project);
-  const entries = await dispatch(env, { msg, only: s.channels, passes: (p) => p === "high" || p === "urgent" }, dests, signal);
+  const img = await image(env.preset, s, signal);
+  if (img) msg.image = metaOf(img);
+  const entries = await dispatch(env, { msg, only: s.channels, passes: (p) => p === "high" || p === "urgent", image: img }, dests, signal);
   const id = newId();
   const counts = summary(entries);
-  env.log("notice", { id, project, run: runOf(meta), to: dests.map((d) => d.key), priority: msg.priority, ...counts });
+  env.log("notice", { id, project, run: runOf(meta), to: dests.map((d) => d.key), priority: msg.priority, ...(img ? { image: { mime: img.mime, size: img.size } } : {}), ...counts });
   const why = verdict(entries, s.require);
   if (why) throw new NodeError(why);
   return { output: { id, ok: counts.failed === 0, sent: entries, counts }, text: `${said(entries)}: ${dests.map((d) => d.key).join(", ")}` };
@@ -285,11 +312,13 @@ export async function ask(env: Env, args: Record<string, unknown>, meta: Record<
       `no one can answer: ${allowed.join(", ")} would need Telegram's buttons (a user id in the preset, and a room or their own chat on Telegram) or a link to the reply page (ntfy or email of their own, and the plugin's public_url${p.public_url ? "" : ", which is not set: NOTIFY_PUBLIC_URL"})`,
     );
   }
+  const img = await image(p, s, signal);
+  if (img) q.image = metaOf(img);
   env.store.data.questions[q.id] = q;
   env.store.save();
-  const entries = await dispatch(env, { msg, only: s.channels, question: q, outgoing: (d) => questionOutgoing(env, q, d, s.channels), passes: (pr) => pr === "urgent" }, dests, signal);
+  const entries = await dispatch(env, { msg, only: s.channels, question: q, outgoing: (d) => questionOutgoing(env, q, d, s.channels, img), passes: (pr) => pr === "urgent", image: img }, dests, signal);
   const counts = summary(entries);
-  env.log("question", { id: q.id, project, run, to: dests.map((d) => d.key), approvers: allowed, expires: new Date(q.expires).toISOString(), ...counts });
+  env.log("question", { id: q.id, project, run, to: dests.map((d) => d.key), approvers: allowed, expires: new Date(q.expires).toISOString(), ...(img ? { image: { mime: img.mime, size: img.size } } : {}), ...counts });
   const why = verdict(entries, s.require);
   if (why) {
     close(env, q, "canceled");

@@ -1,7 +1,8 @@
 #!/bin/sh
 # The plugin's type check and tests in a throwaway node:24-alpine, beside a
 # real ntfy server (access control on: deny-all, a user of the tests and
-# its token) and a Mailpit SMTP that asks for a user and a password, each
+# its token; attachments on, for the images) and a Mailpit SMTP that asks
+# for a user and a password, each
 # in a container of its own on a network of theirs. Telegram and gosidian's
 # resume address are fakes of the tests. The tests run as a user of their
 # own; in the end the container gives back to the caller's user every file
@@ -24,6 +25,7 @@ NTFY= NTFY_TOKEN= SMTP= MAILPIT=
 if [ -z "${NOTIFY_TEST_NO_SERVICES:-}" ]; then
 	docker run -d --name "$NAME-ntfy" --network "$NAME" --network-alias ntfy \
 		-e NTFY_BASE_URL=http://ntfy -e NTFY_LISTEN_HTTP=:80 -e NTFY_AUTH_FILE=/tmp/auth.db -e NTFY_AUTH_DEFAULT_ACCESS=deny-all \
+		-e NTFY_ATTACHMENT_CACHE_DIR=/tmp/attachments \
 		"$NTFY_IMAGE" serve >/dev/null
 	docker run -d --name "$NAME-mailpit" --network "$NAME" --network-alias mailpit \
 		-e MP_SMTP_AUTH="mailer:mailpit-test-pass" -e MP_SMTP_AUTH_ALLOW_INSECURE=true \

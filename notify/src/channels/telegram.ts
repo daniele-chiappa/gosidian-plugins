@@ -6,15 +6,30 @@
 // volume. No parse_mode: the text is shown as it is. A question has inline
 // buttons; their presses come with getUpdates (long polling: a bot has one
 // consumer of its updates), and once it is decided its buttons become the
-// outcome.
+// outcome. A node's image goes as a photo, its bytes uploaded (multipart,
+// never an address Telegram would fetch), the text its caption when the
+// text fits one (1024 characters), else the title, and the text after it.
+import crypto from "node:crypto";
 import type { Preset, Priority, TelegramConfig } from "../preset.ts";
 import type { Store } from "../store.ts";
 import { capUnits, fill } from "../text.ts";
 import { redact } from "../secrets.ts";
 import { causeOf, ChannelError, lines, tryTwice, type Channel, type Dest, type Outgoing, type Sent } from "./channel.ts";
+import type { Image } from "../image.ts";
 
 const TIMEOUT = 15_000;
 const UPDATES = ["callback_query", "message", "my_chat_member"];
+const UPLOAD_TIMEOUT = 120_000;
+// CAPTION: the most of a photo's caption, in characters.
+export const CAPTION = 1024;
+// A topic the bot made, deleted in the group since.
+const THREAD_GONE = /thread not found|topic_deleted|TOPIC_DELETED/i;
+// A photo Telegram does not take as a photo (its size, its sides): it goes
+// as a file, which Telegram takes up to 50 MB.
+const AS_FILE = /PHOTO_INVALID_DIMENSIONS|PHOTO_SAVE_FILE_INVALID|PHOTO_INVALID|PHOTO_EXT_INVALID|IMAGE_PROCESS_FAILED|dimensions|too big|too large/i;
+
+// ImageRefused: Telegram took the message, not its image.
+class ImageRefused extends Error {}
 
 export interface CallbackQuery {
   id: string;
@@ -76,17 +91,22 @@ export class Telegram implements Channel {
 
   // api calls a method of the Bot API. The token is in the address: no
   // error says the address.
-  async api<T = any>(method: string, body: Record<string, unknown>, signal?: AbortSignal, timeout = TIMEOUT): Promise<T> {
+  api<T = any>(method: string, body: Record<string, unknown>, signal?: AbortSignal, timeout = TIMEOUT): Promise<T> {
+    return this.call<T>(method, { headers: { "content-type": "application/json" }, body: JSON.stringify(body) }, signal, timeout);
+  }
+
+  // upload calls a method with a file: multipart/form-data, the file's
+  // bytes in it, the other fields beside (objects as JSON).
+  upload<T = any>(method: string, fields: Record<string, unknown>, field: string, img: Image, signal?: AbortSignal): Promise<T> {
+    const m = multipart(fields, field, img);
+    return this.call<T>(method, { headers: { "content-type": m.type }, body: m.body }, signal, UPLOAD_TIMEOUT);
+  }
+
+  private async call<T>(method: string, init: { headers?: Record<string, string>; body: string | Uint8Array<ArrayBuffer> }, signal: AbortSignal | undefined, timeout: number): Promise<T> {
     const sig = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout);
     let r: Response;
     try {
-      r = await fetch(`${this.cfg.api_url}/bot${this.token}/${method}`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
-        signal: sig,
-        redirect: "error",
-      });
+      r = await fetch(`${this.cfg.api_url}/bot${this.token}/${method}`, { method: "POST", ...init, signal: sig, redirect: "error" });
     } catch (e) {
       throw new ChannelError(`telegram ${method}: ${causeOf(e)}`, { retry: causeOf(e) !== "canceled" });
     }
@@ -137,10 +157,17 @@ export class Telegram implements Channel {
     return p;
   }
 
-  private text(o: Outgoing, tag?: string): string {
+  // head is a message's first line: its priority's label, the topic it
+  // stands for, its title.
+  private head(o: Outgoing, tag?: string): string {
     const s = this.preset.strings;
     const label = o.priority === "urgent" ? s.urgent : o.priority === "high" ? s.high : "";
-    const head = [label, tag ? `[${tag}]` : "", o.title].filter(Boolean).join(" ");
+    return [label, tag ? `[${tag}]` : "", o.title].filter(Boolean).join(" ");
+  }
+
+  private text(o: Outgoing, tag?: string): string {
+    const s = this.preset.strings;
+    const head = this.head(o, tag);
     const answer = o.question && !o.question.buttons && o.question.answer_url ? fill(s.answer_at, { url: o.question.answer_url }) : "";
     const tail = lines(o.link, answer);
     const limit = this.preset.limits.text.telegram;
@@ -150,33 +177,74 @@ export class Telegram implements Channel {
 
   async send(o: Outgoing, signal?: AbortSignal): Promise<Sent> {
     let w = await this.where(o.dest, signal);
-    const body = (): Record<string, unknown> => ({
-      chat_id: w.chat,
-      text: this.text(o, w.tag),
-      ...(w.thread ? { message_thread_id: w.thread } : {}),
-      link_preview_options: { is_disabled: true },
-      ...(silent(o.priority) ? { disable_notification: true } : {}),
-      ...(o.question?.buttons ? { reply_markup: { inline_keyboard: keyboard(o.question.id, o.question.choices) } } : {}),
-    });
-    let m: { message_id: number };
     try {
-      m = await tryTwice(() => this.api("sendMessage", body(), signal));
+      return await this.post(o, w, signal);
     } catch (e) {
       // A topic the bot made, closed or deleted in the group since: made
       // again, once.
-      if (!(w.made && e instanceof TelegramError && /thread not found|topic_deleted|TOPIC_DELETED/i.test(e.description)) || o.dest.kind !== "room") throw e;
+      if (!(w.made && e instanceof TelegramError && THREAD_GONE.test(e.description)) || o.dest.kind !== "room") throw e;
       const room = o.dest.room.name;
       delete this.store.data.topics[room]?.[o.dest.topic!.toLowerCase()];
       this.store.save();
       this.log("telegram: a topic the bot made is gone: made again", { room, topic: o.dest.topic });
       w = await this.where(o.dest, signal);
-      m = await tryTwice(() => this.api("sendMessage", body(), signal));
+      return await this.post(o, w, signal);
     }
-    return { telegram: { chat: w.chat, message_id: m.message_id } };
+  }
+
+  // post sends a message where it goes. With an image: one message, the
+  // photo with the text as its caption (and a question's buttons), when the
+  // text fits a caption; else the photo with the title, silent, then the
+  // text with the buttons, as without an image. The buttons, and so the
+  // outcome they become, are always on the message with the whole text.
+  private async post(o: Outgoing, w: { chat: number; thread?: number; tag?: string }, signal?: AbortSignal): Promise<Sent> {
+    const where = { chat_id: w.chat, ...(w.thread ? { message_thread_id: w.thread } : {}) };
+    const text = this.text(o, w.tag);
+    const quiet = silent(o.priority);
+    const buttons = o.question?.buttons ? { reply_markup: { inline_keyboard: keyboard(o.question.id, o.question.choices) } } : {};
+    const ref = (m: { message_id: number }) => ({ chat: w.chat, message_id: m.message_id });
+    const message = () =>
+      tryTwice(() => this.api<{ message_id: number }>("sendMessage", { ...where, text, link_preview_options: { is_disabled: true }, ...(quiet ? { disable_notification: true } : {}), ...buttons }, signal));
+    if (!o.image) return { telegram: ref(await message()) };
+    const whole = text.length <= CAPTION;
+    const caption = whole ? text : capUnits(this.head(o, w.tag), CAPTION);
+    let photo: { message_id: number } | undefined;
+    let note = "";
+    try {
+      photo = await this.image(o.image, { ...where, ...(caption ? { caption } : {}), ...(quiet || !whole ? { disable_notification: true } : {}), ...(whole ? buttons : {}) }, signal);
+    } catch (e) {
+      if (!(e instanceof ImageRefused)) throw e;
+      note = e.message;
+    }
+    if (photo && whole) return { telegram: ref(photo), image: "sent" };
+    return { telegram: ref(await message()), ...(photo ? { image: "sent" as const } : { image: "dropped" as const, note }) };
+  }
+
+  // image sends a node's image: a photo (a GIF as a file, which Telegram
+  // shows moving); a photo Telegram does not take as one (more than 10 MB,
+  // sides too long, as a full page's screenshot can be) as a file. One it
+  // takes in no way (a group where the bot may not send media): ImageRefused,
+  // and the message goes without it.
+  private async image(img: Image, fields: Record<string, unknown>, signal?: AbortSignal): Promise<{ message_id: number }> {
+    try {
+      if (img.mime !== "image/gif") {
+        try {
+          return await tryTwice(() => this.upload<{ message_id: number }>("sendPhoto", fields, "photo", img, signal));
+        } catch (e) {
+          if (!(e instanceof TelegramError && (e.code === 413 || (e.code === 400 && AS_FILE.test(e.description))))) throw e;
+          this.log("telegram: a photo not taken as one, sent as a file", { error: e.message });
+        }
+      }
+      return await tryTwice(() => this.upload<{ message_id: number }>("sendDocument", fields, "document", img, signal));
+    } catch (e) {
+      if (e instanceof TelegramError && (e.code === 400 || e.code === 413) && !THREAD_GONE.test(e.description)) throw new ImageRefused(`Telegram took no image: ${e.message}`);
+      throw e;
+    }
   }
 
   // outcome turns a question's buttons into one that says how it ended;
-  // pressed, it says it again.
+  // pressed, it says it again. editMessageReplyMarkup changes the buttons
+  // of a text message and of a photo's alike: the caption stays.
   async outcome(ref: { chat: number; message_id: number }, id: string, label: string): Promise<void> {
     try {
       await this.api("editMessageReplyMarkup", {
@@ -252,6 +320,23 @@ export class Telegram implements Channel {
     this.stop.abort();
     await this.loop?.catch(() => undefined);
   }
+}
+
+// multipart writes a multipart/form-data body by hand: FormData would turn
+// each line feed of a caption into CR LF, which Telegram would show. The
+// fields' names are the plugin's, the file's name plain ASCII (image.ts),
+// the boundary random and in no value.
+export function multipart(fields: Record<string, unknown>, field: string, img: Image): { type: string; body: Uint8Array<ArrayBuffer> } {
+  const values = Object.entries(fields).map(([k, v]) => [k, typeof v === "object" ? JSON.stringify(v) : String(v)] as const);
+  let boundary: string;
+  do boundary = `gosidian-notify-${crypto.randomBytes(16).toString("hex")}`;
+  while (values.some(([, v]) => v.includes(boundary)));
+  const head = values.map(([k, v]) => `--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`).join("");
+  const file = `--${boundary}\r\nContent-Disposition: form-data; name="${field}"; filename="${img.name}"\r\nContent-Type: ${img.mime}\r\n\r\n`;
+  const all = Buffer.concat([Buffer.from(head + file, "utf8"), img.data, Buffer.from(`\r\n--${boundary}--\r\n`, "utf8")]);
+  const body = new Uint8Array(new ArrayBuffer(all.length));
+  body.set(all);
+  return { type: `multipart/form-data; boundary=${boundary}`, body };
 }
 
 export function silent(p: Priority): boolean {

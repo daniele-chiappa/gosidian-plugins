@@ -5,7 +5,8 @@ what it should do next. Its nodes:
 
 - **`send`** notifies people, groups and rooms of the preset on their
   channels: a Telegram chat or a topic of a Telegram group, an ntfy topic,
-  an email address;
+  an email address; with an image of the project, if given (a preview's
+  screenshot): a photo on Telegram, an attachment on ntfy and by email;
 - **`ask`** puts a choice of 2 to 4 to people (or to a room, where its
   approvers answer), with Telegram's buttons or a link to the plugin's
   reply page, and POSTs the first valid answer to the run's
@@ -26,14 +27,15 @@ to each channel's length. In a person's or a room's quiet hours, `low` and
 counted, not sent again; each person, room and channel has a cap of
 messages an hour.
 
-Nextcloud, free-text answers, attachments and a self-hosted chat are not
-here: the channels are one interface (`src/channels/channel.ts`), and they
-come later.
+Nextcloud, free-text answers, attachments other than one image and a
+self-hosted chat are not here: the channels are one interface
+(`src/channels/channel.ts`), and they come later.
 
 ## The pipeline
 
-An agent opens a PR, a preview publishes it, `ask` puts the question in the
-team's `agents` topic, and only "approve" merges:
+An agent opens a PR, a preview publishes it and tries it, `ask` puts the
+question in the team's `agents` topic with the check's screenshot, and only
+"approve" merges:
 
 ```yaml
 nodes:
@@ -44,8 +46,9 @@ nodes:
       approvers: [alice]
       title: "The pilot's PR is ready"
       text: "{{ summary.text }}"
-      link: "{{ preview.url }}"
-      choices: [approve, reject]
+      link: "{{ publish.url }}"
+      image: "{{ check.files.0.path }}"     # preview.check's screenshot, an attachment of the project
+      choices: [approve, redo, discard]
       resume_url: "{{ run.resume_url }}"
       expires: 24h
   - id: answer
@@ -86,6 +89,7 @@ nodes:
 | `priority` | `normal` | `low` (silent on Telegram), `normal`, `high`, `urgent` |
 | `key` | | the same key to the same destination within `group_window` (10 minutes) is counted, not sent again |
 | `channels` | all | only these of each destination's channels: `telegram`, `ntfy`, `email` |
+| `image` | | one image of the project, a vault path (an attachment: `{{ check.files.0.path }}`), which gosidian hands by reference: PNG, JPEG, WebP or GIF by its first bytes, at most `limits.image` (8 MiB). See [An image](#an-image) |
 | `require` | `any` | `any`: the node fails only when nothing went (every channel failed); `all`: when a channel failed |
 
 Output: `id`; `ok`, nothing failed; `sent`, one entry per destination and
@@ -93,9 +97,12 @@ channel, `{to, channel, status, error}`, `status` being `sent`, `held`
 (quiet hours), `grouped` (its key's window) or `failed` (with the error);
 `counts` of each status. A destination with none of the node's channels is
 one entry with `channel: null`, failed. A group is its people, each once.
+With an image, a `sent` or `held` entry says what became of it: `image` is
+`sent` (with the message), `dropped` (the message went, or will, without
+it; `note` says why) or `held` (kept for when the held question goes).
 
 `<plugin>.ask` takes `to`, `title`, `text`, `link`, `note`, `priority`,
-`channels` and `require` as `send` does (not `key`), and:
+`channels`, `image` and `require` as `send` does (not `key`), and:
 
 | Setting | Default | |
 |---|---|---|
@@ -149,6 +156,74 @@ only gosidian holds the plugin's token: a question keeps its project, and
 only its project withdraws it; a `key` groups within its project. A call
 without a project is refused.
 
+## An image
+
+`image` names one file of the project, as a pipeline names a file for a
+plugin: a vault path, an attachment (preview's screenshots come back as
+attachments, `{{ check.files.0.path }}`). The manifest asks for
+`permissions.files`, and its `send` and `ask` take `image` by reference
+(`file_refs`): gosidian hands the plugin `{name, mime, size, sha256, url}`,
+the url a ticket of gosidian's, valid while the step may run. Without
+`image` (left out, or null), nothing is fetched; an empty path is gosidian's
+to refuse.
+
+- **From gosidian only.** The url must have the origin of the preset's
+  `gosidian_url` or `gosidian_api` and be a ticket's
+  (`/api/v1/run-files/<ticket>`); the plugin fetches that ticket at
+  `gosidian_api`, whatever origin of gosidian's the url names, never
+  another host or another address, without following a redirect. The
+  plugin's `files_url` in gosidian should then be `gosidian_api`
+  (`http://gosidian:8080` on the network of a compose file, gosidian's
+  `[pipelines] files_url` by default).
+- **Checked.** At most `limits.image` (8 MiB; a size from 1 KiB to 50 MB),
+  refused before it is fetched when gosidian says it is bigger, and
+  stopped when more comes; the size and the SHA-256 gosidian gave; a PNG,
+  JPEG, WebP or GIF **by its first bytes**, whatever its name or MIME type
+  say (an SVG, a PDF, a page are refused). The name it goes with is the
+  file's, plain ASCII, its extension the one its bytes say.
+- **Refused, the node fails** before anything is sent: a file that is not
+  one of those images, one too big, one whose size or SHA-256 differs, a
+  url not of gosidian's, a ticket gone (404: a node that sends an image
+  after the step's time).
+
+What each channel does with it:
+
+- **Telegram**: a photo, its bytes uploaded (`sendPhoto`, multipart: never
+  an address Telegram would fetch), in the person's chat or the room's
+  topic. When the whole text (title, text, link, the reply page's line)
+  fits a caption, 1024 characters, it is one message: the photo, the text
+  its caption, and a question's buttons under it. A longer text: the photo
+  with the title as its caption (silent), then the text as without an
+  image, with the buttons. The buttons, and the outcome they become
+  (`editMessageReplyMarkup`, which changes a photo's as a text's), are
+  always on the message with the whole text. A GIF goes as a file
+  (`sendDocument`, which Telegram shows moving), and so does a photo
+  Telegram does not take as one (more than 10 MB, or sides too long, as a
+  full page's screenshot can have). An image Telegram takes in no way (a
+  group where the bot may not send media): the message goes without it,
+  `image: dropped` and Telegram's error in `note`.
+- **ntfy**: an attachment, a `PUT` to the topic with the bytes and the
+  name (`X-Filename`), the message's title, text, priority, tags, click and
+  actions in headers (RFC 2047, so UTF-8 passes). The server keeps
+  attachments only with an `attachment-cache-dir` (and a `base-url`); a
+  server without, or one that finds it too big (413): the message goes
+  without it, `image: dropped`, `note` saying why, and a server without
+  attachments is not sent one again for an hour. The posts stay one at a
+  time.
+- **Email**: an attachment (`multipart/mixed`): the `text/plain` part as
+  without an image, then the image, its bytes given to nodemailer (no path,
+  no address). No HTML part. A server that refuses the size (552, or past
+  the `SIZE` it announces): the message without it, said.
+
+**Quiet hours, the digest, grouping.** A question held in quiet hours keeps
+its image **on the volume** (`images/<sha256>`, mode 600), since gosidian's
+ticket does not last the night: when the quiet hours end it goes with its
+image, and the image is removed once no held question needs it (sent,
+decided, expired or withdrawn). A `send` held goes in the digest, which
+**carries no image**: its line says `[image]` (`strings.image`), and its
+entry says `image: dropped`. The count of a grouped key goes as text too,
+without the image.
+
 ## The reply page
 
 On a port of its own (8080), apart from MCP (8000):
@@ -181,8 +256,9 @@ The page's texts are the preset's `strings`, English by default.
   a question waits too, unless it is `urgent`. When they end, the held
   messages go as **one digest a channel**: "3 notifications while quiet",
   each with its time, title, first lines and link, as many as fit, then
-  "… and N more"; then each held question still open, with its buttons or
-  its link. Past `limits.held` (100) held for a destination, the oldest
+  "… and N more" (no image: a notice that had one says `[image]`); then
+  each held question still open, with its buttons or its link, and its
+  image. Past `limits.held` (100) held for a destination, the oldest
   goes, and the digest counts it.
 - **Grouping**: `send` with a `key`, to a destination that got the same key
   within `group_window`, is `grouped`: counted, not sent. When the window
@@ -200,7 +276,8 @@ The page's texts are the preset's `strings`, English by default.
 
 The held messages, the open windows, the counts, the open questions and
 the answers still to hand gosidian are in `state.json` in the volume
-(mode 600): a restart loses none of them.
+(mode 600), the images of the held questions beside it (`images/`): a
+restart loses none of them.
 
 ## The channels
 
@@ -239,9 +316,13 @@ the text is shown as it is.
   user id and a group's chat id. Adding the bot to a group is logged too;
   in a group with privacy mode on, the bot sees only the commands sent to
   it.
+- **An image** is a photo, uploaded, the text its caption when it fits
+  1024 characters, else after it ([An image](#an-image)); the bot needs the
+  right to send media in a group.
 - Telegram's groups are **not end-to-end encrypted**: what the bot writes
   goes through Telegram's servers. A notification should say what happened
-  and link to it, not carry the content of private documents.
+  and link to it, not carry the content of private documents (nor their
+  screenshots).
 
 ### ntfy
 
@@ -259,6 +340,13 @@ public server reads it.
 The plugin posts one message at a time: ntfy 2.28 answers some of a
 token's concurrent posts 403, as if the token were not valid.
 
+**An image** is an attachment, which the server keeps only with
+`attachment-cache-dir` and `base-url` set (and within its
+`attachment-file-size-limit`, 15 MB by default); without them the message
+goes without it, said in `sent[]` ([An image](#an-image)). The phone gets
+the attachment's address on the ntfy server: whoever has it opens it until
+it expires (`attachment-expiry-duration`, 3 hours by default).
+
 **iOS**: a self-hosted server reaches an iPhone through Apple's push, which
 ntfy's app gets from ntfy.sh: set `upstream-base-url: "https://ntfy.sh"` on
 your server. ntfy.sh then gets a wake-up signal (the topic's hash), not
@@ -271,7 +359,8 @@ The preset's SMTP server (`host`, `port`), STARTTLS required by default
 the user and the password in files, `from`. One `text/plain` message per
 destination, UTF-8, with `Auto-Submitted: auto-generated`; `high` and
 `urgent` add `X-Priority: 1` and a label in the subject. nodemailer writes
-and sends it, with no access to files or addresses of a message.
+and sends it, with no access to files or addresses of a message. An image
+is an attachment beside the text ([An image](#an-image)).
 
 ## Security
 
@@ -291,8 +380,15 @@ and sends it, with no access to files or addresses of a message.
 - **The network**: the manifest's `permissions.network` lists the hosts the
   plugin calls (Telegram's API, the ntfy server, the SMTP server,
   gosidian's `gosidian_api`), and it calls no other: a `link` is text, an
-  answer goes only to a `resume_url` of gosidian's. The container enforces
+  answer goes only to a `resume_url` of gosidian's, an image is fetched
+  only from gosidian's tickets at `gosidian_api`. The container enforces
   it: give it a network that reaches those only.
+- **The files**: the manifest asks for `permissions.files`, for `image`
+  only: one file of the pipeline's project, which gosidian hands by
+  reference; the plugin never sees the vault. Its ticket is a key, like the
+  resume key: in no output, error or log line, nor in the state; what is
+  kept of an image is its name, type, size and SHA-256 (and, for a held
+  question, its bytes in `images/`).
 - **An answer is a person's**: on Telegram by the user id Telegram gives,
   on the page by a token that only that person got. A page reachable from
   outside the LAN is as exposed as whoever installs makes it: **the token
@@ -303,14 +399,17 @@ and sends it, with no access to files or addresses of a message.
   process but its server.
 
 The separation test runs it so, on a network with no way out, beside a
-real ntfy and Mailpit and fakes of Telegram and gosidian, and checks:
-destinations not in the preset refused, no request to a host outside the
-preset (a link given, a `resume_url` of another host), a GET that decides
-nothing, a press of someone not allowed that counts for nothing, the
-answer at `resume_url` once, no credential, resume key or token of the page
-in any output, in the log or in the state (the tokens as hashes, the
-resume key only where the answer goes), the state mode 600, only tini and
-the server running, no capability, the root read-only.
+real ntfy (without attachments) and Mailpit and fakes of Telegram and
+gosidian, and checks: destinations not in the preset refused, no request
+to a host outside the preset (a link given, a `resume_url` or an image's
+url of another host), an image as a photo with the buttons on it, as an
+attachment by email, without it on that ntfy and said so, a file that is
+not an image refused, a GET that decides nothing, a press of someone not
+allowed that counts for nothing, the answer at `resume_url` once, no
+credential, resume key, token of the page or file ticket in any output, in
+the log or in the state (the tokens as hashes, the resume key only where
+the answer goes), the state mode 600, only tini and the server running, no
+capability, the root read-only.
 
 ## The preset
 
@@ -337,7 +436,7 @@ rooms:
   team:
     telegram: {chat: -1001234567890, topics: {agents: 15, releases: 12}, auto_topics: true}
     ntfy: team-alerts
-limits: {title: 200, text: {telegram: 4000, ntfy: 3500, email: 20000}, per_hour: {person: 30, room: 60, channel: 300}, group_window: 10m, expires: 24h, max_expires: 7d, held: 100}
+limits: {title: 200, text: {telegram: 4000, ntfy: 3500, email: 20000}, per_hour: {person: 30, room: 60, channel: 300}, group_window: 10m, expires: 24h, max_expires: 7d, held: 100, image: 8MiB}
 strings: {lang: en}                        # the texts people read
 ```
 
@@ -354,7 +453,7 @@ show`, then `gosidian plugin accept`).
 ```yaml
 services:
   notify:
-    image: ghcr.io/daniele-chiappa/gosidian-notify:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-notify:0.2.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${NOTIFY_TOKEN:?}
@@ -381,6 +480,7 @@ volumes:
 name = "notify"
 url = "http://notify:8000/mcp"
 token_secret = "notify-token"
+files_url = "http://gosidian:8080"   # the images' tickets: gosidian_api's origin; default [pipelines] files_url
 ```
 
 The secret files must be readable by the user node (1000): `chmod 444`, or
@@ -389,7 +489,12 @@ it from the image; a folder of the host needs `chown 1000:1000`. The
 plugin must reach `gosidian_api` (on the network of a compose file,
 `http://gosidian:8080`) to hand gosidian the answers, and gosidian's
 `resume_url` must have the origin of `gosidian_url` or `gosidian_api`
-(gosidian's `[pipelines] public_url`, or a path when it has none).
+(gosidian's `[pipelines] public_url`, or a path when it has none); so must
+the url of an image's ticket (the plugin's `files_url` in gosidian, else
+`[pipelines] files_url`), which the plugin fetches at `gosidian_api`.
+0.2.0 reads files: its manifest asks for a new accept (`gosidian plugin
+show notify` says `Reads files: yes`, and `files in image, by reference`
+for `send` and `ask`).
 
 ## Environment
 
@@ -404,17 +509,18 @@ plugin must reach `gosidian_api` (on the network of a compose file,
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.1.0 -t gosidian-notify:0.1.0 notify/
+docker build --build-arg VERSION=0.2.0 -t gosidian-notify:0.2.0 notify/
 notify/scripts/test.sh              # types and tests in node:24-alpine, beside a real ntfy and a Mailpit
 notify/scripts/separation-test.sh   # the image as in production, on a network with no way out
 ```
 
-The tests fake the Telegram Bot API (with its long polling) and gosidian's
-resume address, and run the channels against an ntfy server
-(`binwiederhier/ntfy:v2.28.0`, deny-all and a token) and a Mailpit
-(`axllent/mailpit:v1.31.4`, a user and a password) in containers, or a
-small SMTP server of their own (`NOTIFY_TEST_NO_SERVICES=1` skips the
-containers and their tests). The image (about 280 MB) is built for amd64.
+The tests fake the Telegram Bot API (with its long polling and its
+uploads) and gosidian (its resume address and its file tickets), and run
+the channels against an ntfy server (`binwiederhier/ntfy:v2.28.0`, deny-all
+and a token, attachments on) and a Mailpit (`axllent/mailpit:v1.31.4`, a
+user and a password) in containers, or a small SMTP server of their own
+(`NOTIFY_TEST_NO_SERVICES=1` skips the containers and their tests). The
+image (about 280 MB) is built for amd64.
 
 ## Licenses
 

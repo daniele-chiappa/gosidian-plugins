@@ -13,6 +13,7 @@ import { redact } from "./secrets.ts";
 import type { ChannelName } from "./preset.ts";
 import type { Dest, Outgoing } from "./channels/channel.ts";
 import type { CallbackQuery } from "./channels/telegram.ts";
+import type { Image } from "./image.ts";
 
 // What stays of a question once it is closed: its page says how it ended.
 const KEEP_CLOSED = 86400_000;
@@ -21,8 +22,10 @@ const MAX_ATTEMPTS = 40;
 
 // questionOutgoing is what a destination gets of a question: a person who
 // may answer, a link with their own token when a channel of theirs needs
-// it; Telegram's buttons in a room and for a person who may answer.
-export function questionOutgoing(env: Env, q: Question, d: Dest, only?: ChannelName[]): Omit<Outgoing, "dest"> {
+// it; Telegram's buttons in a room and for a person who may answer. Its
+// image is the node's (image), or, for a question held, the one kept on
+// the volume.
+export function questionOutgoing(env: Env, q: Question, d: Dest, only?: ChannelName[], image?: Image): Omit<Outgoing, "dest"> {
   const buttons = Boolean(env.telegram?.polling);
   const may = d.kind === "room" || q.allowed.includes(d.person.name);
   let answer_url: string | undefined;
@@ -32,12 +35,18 @@ export function questionOutgoing(env: Env, q: Question, d: Dest, only?: ChannelN
       answer_url = `${env.preset.public_url}/r/${env.store.token(q, d.person.name)}`;
     }
   }
+  let img = image;
+  if (!img && q.image) {
+    img = env.store.image(q.image);
+    if (!img) env.log("the image of a held question is not on the volume: it goes without", { question: q.id, to: d.key });
+  }
   return {
     title: q.title,
     text: q.text,
     link: q.link,
     priority: q.priority,
     question: { id: q.id, choices: q.choices, ...(answer_url ? { answer_url } : {}), buttons: buttons && may },
+    ...(img ? { image: img } : {}),
   };
 }
 

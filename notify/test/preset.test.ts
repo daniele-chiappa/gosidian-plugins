@@ -63,6 +63,7 @@ limits:
   expires: 2h
   max_expires: 2d
   held: 20
+  image: 4MiB
 strings: {lang: it, answer: Rispondi, digest: "{count} avvisi durante il silenzio"}
 `, "p", { NOTIFY_PUBLIC_URL: "http://ignored" });
   assert.equal(p.public_url, "https://notify.example.com/base");
@@ -74,7 +75,7 @@ strings: {lang: it, answer: Rispondi, digest: "{count} avvisi durante il silenzi
   assert.deepEqual(p.groups.ops, ["alice", "bob"]);
   assert.deepEqual(p.rooms.team.telegram, { chat: -1001234567890, topics: { agents: 15, "release notes": 12 }, names: { agents: "Agents", "release notes": "release notes" }, auto_topics: true, max_auto_topics: 9 });
   assert.deepEqual(p.rooms.team.ntfy, { topic: "team", topics: { errors: "team-errors" } });
-  assert.deepEqual(p.limits, { title: 120, text: { telegram: 3000, ntfy: 2000, email: 9000 }, per_hour: { person: 5, room: 6, channel: 7 }, group_window: 300, expires: 7200, max_expires: 172800, held: 20 });
+  assert.deepEqual(p.limits, { title: 120, text: { telegram: 3000, ntfy: 2000, email: 9000 }, per_hour: { person: 5, room: 6, channel: 7 }, group_window: 300, expires: 7200, max_expires: 172800, held: 20, image: 4 * 2 ** 20 });
   assert.equal(p.strings.answer, "Rispondi");
   assert.equal(p.strings.recorded, DEFAULT_STRINGS.recorded);
   assert.deepEqual(hostsOfPreset(p), ["api.telegram.org:443", "ntfy.example.com:8090", "smtp.example.com:587", "gosidian:8080"]);

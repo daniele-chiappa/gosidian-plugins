@@ -3,16 +3,17 @@
 # capabilities, no new privileges, a read-only root, /tmp in tmpfs, the
 # state in a volume, the credentials as files mounted read-only, on a
 # network with no way out (--internal), beside a real ntfy (deny-all, a
-# token) and a real Mailpit (a user and a password). The harness
-# (separation-harness.ts) fakes Telegram's Bot API and gosidian's resume
-# address, keeps a host outside the preset that counts what reaches it, and
-# drives send, ask and cancel through MCP; it fails if a destination not in
-# the preset is taken, if the plugin calls another host, if a GET or a
-# press of someone not allowed decides, or if a secret is in an output.
-# Then, here: no secret and no token of the reply page in the plugin's log
-# or its state (the resume key only where the answer goes), the state the
-# user's and mode 600, only tini and the server running, no capability, the
-# root read-only.
+# token, no attachments) and a real Mailpit (a user and a password). The
+# harness (separation-harness.ts) fakes Telegram's Bot API and gosidian
+# (its resume address, its file tickets), keeps a host outside the preset
+# that counts what reaches it, and drives send, ask and cancel through MCP,
+# with images by reference; it fails if a destination not in the preset is
+# taken, if the plugin calls another host (an image's url among them), if
+# a GET or a press of someone not allowed decides, or if a secret is in an
+# output. Then, here: no secret, no token of the reply page and no file
+# ticket in the plugin's log or its state (the resume key only where the
+# answer goes), the state the user's and mode 600, only tini and the server
+# running, no capability, the root read-only.
 #
 #   notify/scripts/separation-test.sh                 build gosidian-notify:test, then test it
 #   IMAGE=gosidian-notify:0.1.0 notify/scripts/separation-test.sh
@@ -116,7 +117,7 @@ if [ -n "$leaks" ]; then
 	echo "FAIL: secrets in the log or the state:$leaks" >&2
 	fail=1
 else
-	echo "ok: no credential, resume key or reply-page token in the plugin's log ($(printf '%s\n' "$logs" | wc -l) lines) or its state (the key only where the answer goes)"
+	echo "ok: no credential, resume key, reply-page token or file ticket in the plugin's log ($(printf '%s\n' "$logs" | wc -l) lines) or its state (the key only where the answer goes)"
 fi
 [ "$(printf '%s' "$state" | grep -c '"tokens":{"[0-9a-f]\{64\}"')" -ge 1 ] && echo "ok: the reply page's tokens kept as SHA-256 hashes" || { echo "FAIL: no hashed token in the state" >&2; fail=1; }
 perm=$(docker exec "$c" stat -c '%u %a' /var/lib/gosidian-notify/state.json)

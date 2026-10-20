@@ -1,11 +1,12 @@
 // The channels against real servers, when the tests are given them (as
 // scripts/test.sh and the CI do, in containers): an ntfy server with
-// access control (deny-all, a user and its token) and a Mailpit SMTP that
-// asks for a user and password. What arrives is read back from their
-// APIs. Without NOTIFY_TEST_NTFY or NOTIFY_TEST_SMTP, skipped.
+// access control (deny-all, a user and its token) and attachments, and a
+// Mailpit SMTP that asks for a user and password. What arrives is read
+// back from their APIs, an image's bytes too. Without NOTIFY_TEST_NTFY or
+// NOTIFY_TEST_SMTP, skipped.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fakes, ok, presetText, raw, refused, resumeURL, SECRETS, startApp, until } from "./helpers.ts";
+import { fakes, ok, PNG, presetText, raw, refused, resumeURL, SECRETS, sha256, startApp, until } from "./helpers.ts";
 import { parsePreset } from "../src/preset.ts";
 import { remember } from "../src/secrets.ts";
 
@@ -76,6 +77,32 @@ async function ntfyCase(f: Awaited<ReturnType<typeof fakes>>, run: string): Prom
     assert.equal((await raw(t.pageURL, path, "POST", "choice=0")).status, 200);
     await until("the resume", () => f.gs.resumes.length === 1);
     assert.equal(f.gs.resumes[0].body.choice, "approva");
+
+    // An image: an attachment, the message's fields in headers, UTF-8 and a
+    // long text whole.
+    const long = `Esito della prova: ${"è passato; ".repeat(260)}`.trim();
+    const img = await ok(t, "send", { to: ["alice", "#team/agents"], title: "L'anteprima è pronta 😀", text: long, link: "https://example.com/p/1/", priority: "high", image: f.gs.ref("schermata della prova.png", PNG), channels: ["ntfy"] });
+    assert.deepEqual(img.sent.map((e: any) => [e.status, e.image]), [["sent", "sent"], ["sent", "sent"]]);
+    const a = (await ntfyPoll(`notify-${run}-alice`)).find((x) => x.attachment);
+    assert.equal(a.title, "L'anteprima è pronta 😀");
+    assert.equal(a.message, `${long}\n\nhttps://example.com/p/1/`);
+    assert.ok(Buffer.byteLength(a.message) > 3000);
+    assert.deepEqual([a.priority, a.click], [4, "https://example.com/p/1/"]);
+    assert.deepEqual(a.actions.map((x: any) => [x.action, x.label, x.url]), [["view", "Open the link", "https://example.com/p/1/"]]);
+    assert.deepEqual([a.attachment.name, a.attachment.type, a.attachment.size], ["schermata-della-prova.png", "image/png", PNG.length]);
+    const got = Buffer.from(await (await fetch(a.attachment.url, { headers: { authorization: `Bearer ${NTFY_TOKEN}` } })).arrayBuffer());
+    assert.equal(sha256(got), sha256(PNG));
+    const team = (await ntfyPoll(`notify-${run}-team`)).find((x) => x.attachment);
+    assert.deepEqual(team.tags, ["agents"]);
+    // A question with an image: the action Answer, in a header, still opens the page.
+    await ok(t, "ask", { to: "alice", title: "Approvi la pagina?", choices: ["approva", "rifai", "scarta"], resume_url: resumeURL(f.gs.url), channels: ["ntfy"], image: f.gs.ref("s.png", PNG) });
+    const iq = (await ntfyPoll(`notify-${run}-alice`)).find((x) => x.title === "Approvi la pagina?");
+    const ia = iq.actions.find((x: any) => x.label === "Answer");
+    assert.equal(iq.click, ia.url);
+    assert.equal(iq.attachment.size, PNG.length);
+    assert.equal((await raw(t.pageURL, new URL(ia.url).pathname, "POST", "choice=1")).status, 200);
+    await until("the second resume", () => f.gs.resumes.length === 2);
+    assert.equal(f.gs.resumes[1].body.choice, "rifai");
   } finally {
     await t.close();
   }
@@ -131,6 +158,17 @@ async function emailCase(f: Awaited<ReturnType<typeof fakes>>, run: string): Pro
     assert.equal((await raw(t.pageURL, new URL(link).pathname, "POST", "choice=1")).status, 200);
     await until("the resume", () => f.gs.resumes.length === 1);
     assert.deepEqual([f.gs.resumes[0].body.choice, f.gs.resumes[0].body.by, f.gs.resumes[0].body.channel], ["no", "alice", "page"]);
+
+    // An image: an attachment beside the text, which stays text/plain.
+    await ok(t, "send", { to: "alice", title: `Con immagine ${run}`, text: "Il testo resta testo.\n<b>non è HTML</b>", image: f.gs.ref("schermata della prova.png", PNG), channels: ["email"] });
+    let im: any;
+    await until("the mail with the image", async () => Boolean((im = (await mails()).find((x) => x.Subject === `Con immagine ${run}`))));
+    const withImage = await (await fetch(`${MAILPIT}/api/v1/message/${im.ID}`)).json();
+    assert.equal(withImage.Text.replace(/\r\n/g, "\n"), "Il testo resta testo.\n<b>non è HTML</b>\n");
+    assert.equal(withImage.HTML, "");
+    assert.deepEqual(withImage.Attachments.map((x: any) => [x.FileName, x.ContentType, x.Size]), [["schermata-della-prova.png", "image/png", PNG.length]]);
+    const part = Buffer.from(await (await fetch(`${MAILPIT}/api/v1/message/${im.ID}/part/${withImage.Attachments[0].PartID}`)).arrayBuffer());
+    assert.equal(sha256(part), sha256(PNG));
   } finally {
     await t.close();
   }

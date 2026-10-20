@@ -12,7 +12,8 @@ public_url: http://notify.lan:8086
 
 # gosidian's web UI: a node's note becomes a link to it, and a question's
 # resume_url must be gosidian's. gosidian_api is where the plugin reaches
-# gosidian to hand it an answer (default gosidian_url).
+# gosidian to hand it an answer and to fetch a node's image (default
+# gosidian_url).
 gosidian_url: https://gosidian.example.com
 gosidian_api: http://gosidian:8080
 
@@ -67,6 +68,7 @@ limits:
   expires: 24h                        # a question's wait, when the node gives none
   max_expires: 7d
   held: 100                           # held a destination in its quiet hours; past it, the oldest go
+  image: 8MiB                         # a node's image at most (1 KiB to 50 MB); Telegram takes a photo up to 10 MB, a file up to 50 MB
 
 # The texts the people read, English by default.
 strings:
@@ -90,3 +92,4 @@ strings:
   # more: "… and {count} more"
   # high: "[high]"
   # urgent: "[URGENT]"
+  # image: "[image]"                  # in a digest, a held notice that had an image

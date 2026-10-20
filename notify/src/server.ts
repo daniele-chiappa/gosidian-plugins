@@ -5,8 +5,10 @@
 // bearer of gosidian) and GET /health on PORT (8000); the reply page at
 // /r/<token> and /health on NOTIFY_HTTP_PORT (8080), for the people's
 // browsers. A ticker sends the digests of the quiet hours and the counts of
-// the grouped keys, expires the questions and tries again the answers
-// gosidian has not taken yet.
+// the grouped keys, expires the questions, tries again the answers gosidian
+// has not taken yet and removes the images no held question needs. The
+// plugin reads the files a pipeline hands it (a node's image), by
+// reference, from gosidian only.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,7 +22,7 @@ import { loadSecrets, redact, redactAll, type Secrets } from "./secrets.ts";
 import { Store } from "./store.ts";
 import { closeGroups, release, type Env } from "./dispatch.ts";
 import { onCallback, questionOutgoing, sweep } from "./questions.ts";
-import { ask, cancel, configured, inputSchemas, NodeError, outputSchemas, send, type Result } from "./nodes.ts";
+import { ask, cancel, configured, inputSchemas, NodeError, outputSchemas, send, toolSchemas, type Result } from "./nodes.ts";
 import { listen } from "./page.ts";
 import type { Channel } from "./channels/channel.ts";
 import { Telegram } from "./channels/telegram.ts";
@@ -50,9 +52,9 @@ function int(name: string, def: number): number {
 
 const DESCRIPTIONS: Record<string, (p: Preset) => string> = {
   send: (p) =>
-    `Notifies people, groups and rooms of the preset on their channels (${configured(p).join(", ")}): plain text, cut to each channel's length. In quiet hours low and normal wait for one digest; the same key within ${formatDuration(p.limits.group_window)} is counted, not sent again`,
+    `Notifies people, groups and rooms of the preset on their channels (${configured(p).join(", ")}): plain text, cut to each channel's length, and an image of the project if given. In quiet hours low and normal wait for one digest; the same key within ${formatDuration(p.limits.group_window)} is counted, not sent again`,
   ask: (p) =>
-    `Asks a choice of 2 to 4 (the first the positive one) and POSTs the first valid answer to the run's resume_url, for a wait.call: Telegram's buttons, or a link to the plugin's reply page on ntfy and email. Only the people of to, or the approvers, answer; it waits ${formatDuration(p.limits.expires)} by default`,
+    `Asks a choice of 2 to 4 (the first the positive one), with an image of the project if given, and POSTs the first valid answer to the run's resume_url, for a wait.call: Telegram's buttons, or a link to the plugin's reply page on ntfy and email. Only the people of to, or the approvers, answer; it waits ${formatDuration(p.limits.expires)} by default`,
   cancel: () => "Withdraws an open question of the project (decided elsewhere): its links stop working, its buttons say so",
 };
 
@@ -67,10 +69,13 @@ export function manifest(p: Preset): Record<string, unknown> {
       name: n,
       tool: n,
       description: DESCRIPTIONS[n](p),
+      // The image: gosidian hands a reference, which the plugin fetches
+      // from gosidian (gosidian_api, in the network below).
+      ...(n === "cancel" ? {} : { files: ["image"], file_refs: true }),
       input_schema: inputs[n],
       output_schema: outputSchemas[n],
     })),
-    permissions: { files: false, network: hostsOfPreset(p) },
+    permissions: { files: true, network: hostsOfPreset(p) },
   };
 }
 
@@ -115,7 +120,8 @@ export async function start(o: StartOptions): Promise<App> {
   if (preset.channels.email) channels.email = new Email(preset, secrets.smtp_user, secrets.smtp_password);
 
   const man = manifest(preset);
-  const tools = (man.nodes as any[]).map((n) => ({ name: n.tool, description: n.description, inputSchema: n.input_schema }));
+  const schemas = toolSchemas(preset);
+  const tools = (man.nodes as any[]).map((n) => ({ name: n.tool, description: n.description, inputSchema: schemas[n.name] }));
 
   const mcp = () => {
     const s = new Server({ name: "gosidian-notify", version: VERSION }, { capabilities: { tools: {} } });
@@ -200,6 +206,7 @@ export async function start(o: StartOptions): Promise<App> {
         ["release", () => release(env, (q, d) => questionOutgoing(env, q, d))],
         ["groups", () => closeGroups(env)],
         ["questions", () => sweep(env)],
+        ["images", () => store.sweepImages()],
       ] as const) {
         try {
           await fn();

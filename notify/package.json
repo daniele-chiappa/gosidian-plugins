@@ -1,6 +1,6 @@
 {
   "name": "gosidian-notify",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin that notifies the people and rooms of its preset on Telegram, ntfy and email, and takes their answer to a question back to the run",

@@ -41,15 +41,16 @@ jobs:
 
       - name: Start ntfy and Mailpit
         # The images scripts/test.sh pins, on the runner's ports: ntfy with
-        # access control (deny-all, a user of the tests and its token),
-        # Mailpit asking for a user and a password. They start while npm ci
-        # runs.
+        # access control (deny-all, a user of the tests and its token) and
+        # attachments, Mailpit asking for a user and a password. They start
+        # while npm ci runs.
         run: |
           set -eu
           NTFY_IMAGE=$(sed -n 's/^NTFY_IMAGE=//p' scripts/test.sh)
           MAILPIT_IMAGE=$(sed -n 's/^MAILPIT_IMAGE=//p' scripts/test.sh)
           docker run -d --name ntfy -p 127.0.0.1:8090:80 \
             -e NTFY_BASE_URL=http://127.0.0.1:8090 -e NTFY_LISTEN_HTTP=:80 -e NTFY_AUTH_FILE=/tmp/auth.db -e NTFY_AUTH_DEFAULT_ACCESS=deny-all \
+            -e NTFY_ATTACHMENT_CACHE_DIR=/tmp/attachments \
             "$NTFY_IMAGE" serve
           docker run -d --name mailpit -p 127.0.0.1:1025:1025 -p 127.0.0.1:8025:8025 \
             -e MP_SMTP_AUTH="mailer:mailpit-test-pass" -e MP_SMTP_AUTH_ALLOW_INSECURE=true "$MAILPIT_IMAGE"
@@ -75,8 +76,8 @@ jobs:
 
       - name: Tests
         # The preset, the nodes, quiet hours, grouping, caps, Telegram
-        # (a fake Bot API), the questions and the reply page, the secrets;
-        # ntfy and email against the servers above.
+        # (a fake Bot API), the questions and the reply page, the images by
+        # reference, the secrets; ntfy and email against the servers above.
         env:
           NOTIFY_TEST_NTFY: http://127.0.0.1:8090
           NOTIFY_TEST_SMTP: 127.0.0.1:1025

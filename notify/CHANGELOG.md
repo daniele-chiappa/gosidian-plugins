@@ -4,6 +4,51 @@ The changes of the `notify` plugin, newest first. A tag `notify/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-notify:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.2.0] — 2026-10-20
+
+An image with a notice or a question: a preview's screenshot reaches the
+phone with the question it is about.
+
+### Added
+- **`image`**, a setting of `send` and `ask`: one file of the project (a
+  vault path, an attachment as `preview.check`'s screenshot comes back),
+  which gosidian hands by reference (`file_refs`). The plugin fetches it
+  from gosidian only: the ticket's path at `gosidian_api`, the url of
+  another host or another address of gosidian's refused; at most
+  `limits.image` (8 MiB by default), its size and SHA-256 checked; a PNG,
+  JPEG, WebP or GIF by its first bytes. A file that is none of them, too
+  big, or not what gosidian named fails the node before anything is sent.
+- **Telegram**: the image as a photo, uploaded (multipart, never an address
+  Telegram fetches), in the person's chat or the room's topic; the text its
+  caption when it fits 1024 characters, else the title as its caption and
+  the text after it. A question's buttons, and their outcome, on the
+  message with the whole text. A GIF, or a photo Telegram does not take as
+  one (more than 10 MB, sides too long), as a file; an image taken in no
+  way, the message without it.
+- **ntfy**: the image as an attachment, a `PUT` with the bytes and the
+  message's fields in headers (RFC 2047). A server without attachments (no
+  `attachment-cache-dir`), or one that finds it too big: the message
+  without it, and not tried again for an hour on that server.
+- **Email**: the image as an attachment beside the `text/plain` part; a
+  server that refuses the size gets the message without it.
+- **The output**: a `sent` or `held` entry of a node with an image says
+  `image: sent`, `dropped` (with a `note` saying why) or `held`.
+- **Quiet hours**: a question held keeps its image on the volume
+  (`images/<sha256>`, mode 600), since gosidian's ticket does not last the
+  night, and sends it when they end; the image goes once no held question
+  needs it. The digest carries no image: a notice that had one says
+  `[image]` (`strings.image`). The count of a grouped key goes as text.
+- `limits.image` in the preset: a size, from 1 KiB to 50 MB.
+
+### Changed
+- The manifest asks for `permissions.files`, and `send` and `ask` declare
+  `files: [image]`, by reference: a new manifest, to accept again. Its
+  network is the same: the preset's hosts and `gosidian_api`.
+- The ticket of a file is redacted like the resume key: in no output, error
+  or log line.
+- The tests run ntfy with attachments; the separation test's ntfy has none,
+  and checks that path.
+
 ## [0.1.0] — 2026-10-20
 
 The first release: notifications to the people, groups and rooms of the

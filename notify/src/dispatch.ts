@@ -4,13 +4,15 @@
 // urgent pass), the grouping of a key (the same key within group_window
 // counted, not sent, and one message at the window's end with the count),
 // the hourly caps of a person, a room and a channel. Each send gives an
-// entry per destination and channel: sent, held, grouped or failed.
+// entry per destination and channel: sent, held, grouped or failed; with an
+// image, whether it went (or will) with the message.
 import { CHANNELS, type ChannelName, type Preset, type Priority, type Quiet } from "./preset.ts";
 import type { Group, Held, Msg, Question, Store } from "./store.ts";
 import { fill, topicName } from "./text.ts";
 import { redact } from "./secrets.ts";
 import type { Channel, Dest, Outgoing, Sent } from "./channels/channel.ts";
 import type { Telegram } from "./channels/telegram.ts";
+import type { Image } from "./image.ts";
 
 export class NodeError extends Error {}
 
@@ -40,6 +42,11 @@ export interface Entry {
   channel: ChannelName | null;
   status: Status;
   error?: string;
+  // image, for a node with one: sent with the message; dropped (the
+  // message went, or will, without it: note says why); held, kept for when
+  // the held question goes.
+  image?: "sent" | "dropped" | "held";
+  note?: string;
 }
 
 const HOUR = 3600_000;
@@ -198,7 +205,9 @@ export async function deliver(env: Env, d: Dest, chans: ChannelName[], out: Omit
         return { to: d.key, channel: c, status: "failed", error };
       }
       if (sent.telegram && o.question) o.question.telegram.push(sent.telegram);
-      return { to: d.key, channel: c, status: "sent" };
+      const img = out.image ? { image: sent.image ?? "sent", ...(sent.note ? { note: sent.note } : {}) } : {};
+      if (sent.image === "dropped") env.log("an image not sent, the message without it", { to: d.key, channel: c, note: sent.note ?? null });
+      return { to: d.key, channel: c, status: "sent", ...img };
     }),
   );
   env.store.save();
@@ -217,11 +226,16 @@ export interface Notice {
   passes: (p: Priority) => boolean;
   // system: a digest or a count; past the caps, and not grouped.
   system?: boolean;
+  // image: the node's image, with its bytes.
+  image?: Image;
 }
 
-export function plainOutgoing(m: Msg): Omit<Outgoing, "dest"> {
-  return { title: m.title, text: m.text, link: m.link, priority: m.priority };
+export function plainOutgoing(m: Msg, image?: Image): Omit<Outgoing, "dest"> {
+  return { title: m.title, text: m.text, link: m.link, priority: m.priority, ...(image ? { image } : {}) };
 }
+
+// HELD_IMAGE: what a held entry says of a plain message's image.
+const HELD_IMAGE = { image: "dropped" as const, note: "held for the digest of the quiet hours, which carries no image" };
 
 function groupKey(m: Msg, d: Dest): string {
   return JSON.stringify([m.project, m.key, d.key]);
@@ -247,15 +261,16 @@ export async function dispatch(env: Env, n: Notice, dests: Dest[], signal?: Abor
         }
       }
       if (inQuiet(quietOf(d), now, env.preset.time_zone) && !n.passes(n.msg.priority)) {
-        hold(env, d, chans, n);
-        return chans.map((c) => ({ to: d.key, channel: c, status: "held" }));
+        const kept = hold(env, d, chans, n);
+        const img = !n.image ? {} : !n.question ? HELD_IMAGE : kept ? { image: "held" as const } : { image: "dropped" as const, note: "the image could not be kept on the volume: the question will go without it" };
+        return chans.map((c) => ({ to: d.key, channel: c, status: "held", ...img }));
       }
       // The key's window opens before the send, so a send of the same key
       // at the same time is grouped; nothing sent, it closes again, unless
       // another came in it meanwhile.
       const win: Group | undefined = key ? { dest: d.key, project: n.msg.project, key: n.msg.key!, until: now + env.preset.limits.group_window * 1000, count: 0, channels: chans } : undefined;
       if (win) data.groups[key] = win;
-      const out = n.outgoing ? n.outgoing(d) : plainOutgoing(n.msg);
+      const out = n.outgoing ? n.outgoing(d) : plainOutgoing(n.msg, n.image);
       const entries = await deliver(env, d, chans, out, { system: n.system, question: n.question, signal });
       if (win && !entries.some((e) => e.status === "sent") && data.groups[key] === win && win.count === 0) {
         delete data.groups[key];
@@ -269,9 +284,20 @@ export async function dispatch(env: Env, n: Notice, dests: Dest[], signal?: Abor
 
 // hold keeps a notice for the end of a destination's quiet hours: the same
 // key held again counts on the one held, and past limits.held the oldest
-// goes.
-function hold(env: Env, d: Dest, chans: ChannelName[], n: Notice): void {
+// goes. A question's image is kept on the volume, for when it goes: the
+// ticket gosidian gave for it does not last the night. It says whether the
+// image was kept.
+function hold(env: Env, d: Dest, chans: ChannelName[], n: Notice): boolean {
   const data = env.store.data;
+  let kept = false;
+  if (n.question && n.image) {
+    try {
+      env.store.putImage(n.image);
+      kept = true;
+    } catch (e) {
+      env.log("the image of a held question not kept: it will go without", { to: d.key, question: n.question.id, error: redact((e as Error).message) });
+    }
+  }
   const mine = data.held.filter((h) => h.dest === d.key);
   const same = n.msg.key && !n.question ? mine.find((h) => h.msg?.key === n.msg.key && h.msg?.project === n.msg.project) : undefined;
   if (same) {
@@ -290,6 +316,7 @@ function hold(env: Env, d: Dest, chans: ChannelName[], n: Notice): void {
     }
   }
   env.store.save();
+  return kept;
 }
 
 // --- what the ticker does: the digests and the counts ---
@@ -306,7 +333,7 @@ export function digest(env: Env, items: Held[], dropped: number, c: ChannelName)
   for (const h of items) {
     const m = h.msg!;
     if (RANK[m.priority] > RANK[priority]) priority = m.priority;
-    const head = `${clock(h.at, env.preset.time_zone)} ${m.title || m.text.split("\n")[0]}${h.count && h.count > 1 ? ` (+${h.count - 1})` : ""}`;
+    const head = `${clock(h.at, env.preset.time_zone)} ${m.title || m.text.split("\n")[0]}${h.count && h.count > 1 ? ` (+${h.count - 1})` : ""}${m.image && s.image ? ` ${s.image}` : ""}`;
     const body = m.title && m.text ? m.text.split("\n").slice(0, 3).join("\n").slice(0, 300) : "";
     const part = [head, body, m.link].filter(Boolean).join("\n");
     const size = c === "ntfy" ? Buffer.byteLength(part) + 2 : part.length + 2;
@@ -373,7 +400,8 @@ export async function closeGroups(env: Env): Promise<void> {
     if (!g.count || !g.last) continue;
     const d = g.dest.startsWith("#") || Object.hasOwn(env.preset.people, g.dest) ? destOf(env, g.dest) : "";
     if (typeof d === "string") continue;
-    const m: Msg = { ...g.last, title: fill(env.preset.strings.grouped, { title: g.last.title || g.last.text.split("\n")[0], count: g.count }), key: undefined };
+    // The count goes without the image: the ticket of the last one is gone.
+    const m: Msg = { ...g.last, title: fill(env.preset.strings.grouped, { title: g.last.title || g.last.text.split("\n")[0], count: g.count }), key: undefined, image: undefined };
     const only = g.channels;
     await dispatch(env, { msg: m, only, passes: (p) => p === "high" || p === "urgent", system: true }, [d]);
     env.log("grouped key: its count sent", { to: g.dest, key: g.key, count: g.count });

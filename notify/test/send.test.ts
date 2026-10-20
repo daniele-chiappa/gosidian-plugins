@@ -28,7 +28,7 @@ test("gosidian's view: bearer, health, manifest, tools", async () => {
     assert.equal(man.gosidian, 1);
     assert.deepEqual(man.nodes.map((n: any) => n.name), ["send", "ask", "cancel"]);
     const u = (s: string) => new URL(s).host;
-    assert.deepEqual(man.permissions, { files: false, network: [u(f.tg.url), u(f.ntfy.url), `127.0.0.1:${f.smtp.port}`, u(f.gs.url)] });
+    assert.deepEqual(man.permissions, { files: true, network: [u(f.tg.url), u(f.ntfy.url), `127.0.0.1:${f.smtp.port}`, u(f.gs.url)] });
     const to = man.nodes[0].input_schema.properties.to.description;
     assert.match(to, /alice, bob, carol, dave, @ops, #team, #team\/agents, #team\/releases, #team\/<topic>, #alerts, #alerts\/errors/);
     assert.deepEqual(man.nodes[0].input_schema.properties.channels.items.enum, ["telegram", "ntfy", "email"]);
