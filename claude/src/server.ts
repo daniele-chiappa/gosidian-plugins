@@ -1,10 +1,11 @@
 // gosidian-claude: a gosidian plugin whose nodes run Claude Code headless
 // on the files a pipeline hands it, and keep its version. One container is
-// one agent: its preset names the credentials (a subscription's token or an
-// API key), the models and effort levels, the tools it may allow and the
-// limits of a step. Claude Code is not in the image: the plugin installs it
-// from npm into its volume. MCP at /mcp (Streamable HTTP, stateless),
-// GET /health.
+// one agent: its preset names the endpoints (Anthropic's, with a
+// subscription's token or an API key, and others that speak the Messages
+// API: OpenRouter, Ollama, vLLM), the models on each, the effort levels,
+// the tools it may allow and the limits of a step. Claude Code is not in
+// the image: the plugin installs it from npm into its volume. MCP at /mcp
+// (Streamable HTTP, stateless), GET /health.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -15,22 +16,20 @@ import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import {
-  isAlias, loadPreset, readSecret, runOutput, runSchema, updateOutput, updateSchema, usageOutput, usageSchema, versionOutput, versionSchema,
+  aliasesOf, isAnthropic, loadPreset, readSecrets, runOutputOf, runSchema, updateOutput, updateSchema, usageOutput, usageSchema, versionOutput, versionSchema,
   type Preset,
 } from "./preset.ts";
-import { AnthropicProxy } from "./proxy.ts";
-import { ClaudeProber, runStep, StepError, type Env } from "./run.ts";
+import { CONTRACT, META } from "./kit/contract.ts";
+import { hostsOf } from "./kit/repos.ts";
+import { AnthropicProxy, upstreamsOf } from "./proxy.ts";
+import { ClaudeProber, runStep, StepError, VERSION, type Env } from "./run.ts";
 import { Subscription } from "./subscription.ts";
 import { origin, StepLog, stepOf } from "./steps.ts";
 import { Versions, type Installer, type Registry } from "./versions.ts";
 import { NPM_REGISTRY, NpmInstaller, NpmRegistry } from "./npm.ts";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8"));
-export const VERSION: string = process.env.PLUGIN_VERSION || pkg.version;
+export { VERSION };
 
-// The _meta field gosidian sends with the tokens the run may still use.
-const TOKENS_LEFT = "gosidian/llm_tokens_left";
 const MAX_REQUEST = 16 << 20;
 // The system prompt of the plugin's own requests with a subscription's
 // token (a ping for the limits), as Claude Code's.
@@ -55,6 +54,10 @@ interface Operation {
   input: Record<string, unknown>;
   output: Record<string, unknown>;
   files?: boolean;
+  // contract is the common contract the node keeps.
+  contract?: string;
+  // mcp: the node takes gosidian's MCP for a call (its setting mcp).
+  mcp?: boolean;
 }
 
 export function operations(p: Preset): Operation[] {
@@ -62,10 +65,12 @@ export function operations(p: Preset): Operation[] {
     {
       name: "run",
       access: "write",
-      description: `Runs Claude Code (${p.name}) headless on a task and the files it names: it answers with text or JSON, and gives back the files it writes`,
+      description: `Runs Claude Code (${p.name}) headless on a task and the files it names, on a model of the preset: it answers with text or JSON, and gives back the files it writes`,
       input: runSchema(p),
-      output: runOutput,
+      output: runOutputOf(p),
       files: true,
+      contract: CONTRACT,
+      ...(p.mcp.length ? { mcp: true } : {}),
     },
     {
       name: "version",
@@ -84,7 +89,7 @@ export function operations(p: Preset): Operation[] {
     {
       name: "usage",
       access: "read",
-      description: "How much of the subscription's session (5 hours) and week is used and left, and when each resets (not applicable with an API key); and the last steps run, each with its model, tokens and cost",
+      description: "How much of the subscription's session (5 hours) and week is used and left, and when each resets (not applicable without one); and the last steps run, each with its model, endpoint, tokens and cost",
       input: usageSchema,
       output: usageOutput,
     },
@@ -99,9 +104,13 @@ export function manifest(p: Preset, registry = NPM_REGISTRY): Record<string, unk
     version: VERSION,
     gosidian: 1,
     description: p.description,
-    nodes: ops.map((o) => ({ name: o.name, tool: o.name, description: o.description, ...files(o), input_schema: o.input, output_schema: o.output })),
+    nodes: ops.map((o) => ({ name: o.name, tool: o.name, description: o.description, ...(o.contract ? { contract: o.contract } : {}), ...(o.mcp ? { mcp: true } : {}), ...files(o), input_schema: o.input, output_schema: o.output })),
     tools: ops.map((o) => ({ name: o.name, access: o.access, description: o.description, ...files(o), input_schema: o.input, output_schema: o.output })),
-    permissions: { files: true, network: ["gosidian", new URL(p.upstream).host, new URL(registry).host] },
+    permissions: {
+      files: true,
+      network: [...new Set(["gosidian", ...Object.values(p.endpoints).map((e) => new URL(e.url).host), ...hostsOf(p.repos), new URL(registry).host])],
+      ...(p.mcp.length ? { mcp: p.mcp } : {}),
+    },
   };
 }
 
@@ -161,7 +170,8 @@ export interface App {
 
 export interface StartOptions {
   preset: Preset;
-  credential: string;
+  // credentials are the endpoints' keys, by name.
+  credentials: Record<string, string>;
   token: string;
   port: number;
   workers: number;
@@ -178,11 +188,13 @@ export interface StartOptions {
 export async function start(opts: StartOptions): Promise<App> {
   const { preset } = opts;
   const elog = opts.env.log;
+  const endpoints = Object.values(preset.endpoints);
+  // The subscription's endpoint, and the one of Anthropic's the plugin asks
+  // for the API's models.
+  const oauth = endpoints.find((e) => e.auth === "oauth");
+  const anthropic = oauth ?? endpoints.find(isAnthropic);
   let subscription: Subscription | undefined;
-  const proxy = new AnthropicProxy(
-    { baseUrl: preset.upstream, kind: preset.credentials.kind, credential: opts.credential },
-    { log: elog, onHeaders: (h) => subscription?.note(h) },
-  );
+  const proxy = new AnthropicProxy(upstreamsOf(preset, opts.credentials), { log: elog, onHeaders: (h) => subscription?.note(h) });
   await proxy.listen();
   const slots = new Slots(opts.workers);
   const steps = new StepLog({ file: path.join(opts.versionsDir, "steps.json"), keep: opts.keepSteps, log: elog });
@@ -194,13 +206,14 @@ export async function start(opts: StartOptions): Promise<App> {
     prober: new ClaudeProber(env, (fn) => slots.with(fn)),
     registry: opts.registry ?? new NpmRegistry(opts.registryUrl),
     channel: preset.version,
-    aliases: preset.models.filter(isAlias),
+    aliases: aliasesOf(preset),
+    ...(anthropic ? {} : { noProbe: "the preset has no Anthropic endpoint (auth oauth or api_key): no alias to probe, and no list of the API's models" }),
     keep: opts.keepVersions,
     log: elog,
   });
 
-  const listModels = async (): Promise<{ id: string; display_name?: string; effort: string[] }[]> => {
-    const r = await proxy.call("GET", "/v1/models?limit=100");
+  const listModels = async (endpoint: string): Promise<{ id: string; display_name?: string; effort: string[] }[]> => {
+    const r = await proxy.call(endpoint, "GET", "/v1/models?limit=100");
     if (!r.ok) throw new Error(`the API answered ${r.status}`);
     const body: any = await r.json();
     return (Array.isArray(body?.data) ? body.data : []).map((m: any) => {
@@ -211,20 +224,20 @@ export async function start(opts: StartOptions): Promise<App> {
   };
   // pingModel is the cheapest model the plugin knows: haiku as the version
   // in use resolves it, else the API's.
-  const pingModel = async (): Promise<string> => {
+  const pingModel = async (endpoint: string): Promise<string> => {
     const cur = versions.current();
     const aliases = Object.values((cur && versions.meta(cur)?.probe?.aliases) || {});
     const known = aliases.find((m) => m.includes("haiku")) ?? aliases[0];
     if (known) return known;
-    const ids = (await listModels()).map((m) => m.id);
+    const ids = (await listModels(endpoint)).map((m) => m.id);
     const id = ids.find((m) => m.includes("haiku")) ?? ids[0];
     if (!id) throw new Error("the API lists no model");
     return id;
   };
   subscription = new Subscription({
-    kind: preset.credentials.kind,
+    kind: oauth ? "oauth" : anthropic ? "api_key" : "none",
     usage: async () => {
-      const r = await proxy.call("GET", "/api/oauth/usage");
+      const r = await proxy.call(oauth!.name, "GET", "/api/oauth/usage");
       let body: unknown = null;
       try {
         body = await r.json();
@@ -234,7 +247,7 @@ export async function start(opts: StartOptions): Promise<App> {
       return { status: r.status, body };
     },
     ping: async () => {
-      const r = await proxy.call("POST", "/v1/messages", { model: await pingModel(), max_tokens: 1, system: PING_SYSTEM, messages: [{ role: "user", content: "ok" }] });
+      const r = await proxy.call(oauth!.name, "POST", "/v1/messages", { model: await pingModel(oauth!.name), max_tokens: 1, system: PING_SYSTEM, messages: [{ role: "user", content: "ok" }] });
       await r.arrayBuffer();
       if (!r.ok) throw new Error(`the API answered ${r.status}`);
     },
@@ -263,29 +276,33 @@ export async function start(opts: StartOptions): Promise<App> {
 
   const handlers: Record<string, (args: Record<string, unknown>, meta: Record<string, unknown> | undefined, signal: AbortSignal) => Promise<{ output: any; files?: { name: string; mime: string; data: Buffer }[] }>> = {
     run: async (args, meta, signal) => {
-      const left = meta?.[TOKENS_LEFT];
+      const left = meta?.[META.tokensLeft];
       const t0 = Date.now();
       let res: Awaited<ReturnType<typeof runStep>>;
       try {
-        res = await slots.with((slot) => runStep(env, args, typeof left === "number" ? left : undefined, signal, slot), signal);
+        res = await slots.with((slot) => runStep(env, args, typeof left === "number" ? left : undefined, signal, slot, meta), signal);
       } catch (e) {
         const model = typeof args.model === "string" ? args.model : undefined;
-        steps.add({ at: new Date().toISOString(), seconds: Math.round((Date.now() - t0) / 100) / 10, ...origin(meta), ...(model ? { model } : {}), error: (e as Error).message.slice(0, 300) });
+        const endpoint = preset.models.find((m) => m.name === model)?.endpoint;
+        const repo = (args.repo as { name?: unknown } | undefined)?.name;
+        steps.add({ at: new Date().toISOString(), seconds: Math.round((Date.now() - t0) / 100) / 10, ...origin(meta), ...(model ? { model } : {}), ...(endpoint ? { endpoint } : {}), ...(typeof repo === "string" ? { repo: { name: repo } } : {}), error: (e as Error).message.slice(0, 300) });
         throw e;
       }
       const o: any = res.output;
       steps.add(stepOf(o, meta, t0, Date.now()));
-      elog("step done", { model: o.model, effort: o.effort?.applied, turns: o.turns, tokens: o.usage.total_tokens, cost: o.cost, files: res.files.length, seconds: (Date.now() - t0) / 1000 });
+      elog("step done", { model: o.model?.id, endpoint: o.model?.endpoint, effort: o.effort?.applied, turns: o.turns, tokens: o.usage.total_tokens, cost: o.cost, files: res.files.length, ...(o.repo ? { repo: o.repo.name, commit: o.repo.commit ?? null } : {}), ...(o.mcp ? { mcp: o.mcp.level } : {}), seconds: (Date.now() - t0) / 1000 });
       return res;
     },
     version: async (args) => {
       check(ops[1], args);
       const info: Record<string, unknown> = await versions.info();
-      try {
-        info.models = await listModels();
-      } catch (e) {
-        info.models = [];
-        info.models_error = (e as Error).message;
+      info.models = [];
+      if (anthropic) {
+        try {
+          info.models = await listModels(anthropic.name);
+        } catch (e) {
+          info.models_error = (e as Error).message;
+        }
       }
       return { output: info };
     },
@@ -417,7 +434,7 @@ function installLoop(versions: Versions, delayMs = 60_000): void {
 async function main(): Promise<void> {
   const presetFile = process.env.CLAUDE_PRESET || "/etc/gosidian-claude/preset.yaml";
   const preset = loadPreset(presetFile);
-  const credential = readSecret(preset.credentials);
+  const credentials = readSecrets(preset);
   const root = process.getuid?.() === 0;
   if (!root) log("not root: Claude Code runs as the server's user, and its tools could read the credential and the server's environment", {});
   const workers = Math.max(1, int("CLAUDE_WORKERS", 1));
@@ -430,7 +447,7 @@ async function main(): Promise<void> {
   const port = int("PORT", 8000);
   const app = await start({
     preset,
-    credential,
+    credentials,
     token: process.env.GOSIDIAN_PLUGIN_TOKEN ?? "",
     port,
     workers,
@@ -448,7 +465,7 @@ async function main(): Promise<void> {
     },
   });
   log("gosidian-claude ready", {
-    agent: preset.name, version: VERSION, port, credentials: preset.credentials.kind, models: preset.models,
+    agent: preset.name, version: VERSION, port, endpoints: Object.values(preset.endpoints).map((e) => `${e.name} (${e.auth})`), models: preset.models.map((m) => m.name),
     tools: preset.tools.allowed, claude_code: app.versions.current(), channel: preset.version, separate_user: root,
     token: Boolean(process.env.GOSIDIAN_PLUGIN_TOKEN),
   });

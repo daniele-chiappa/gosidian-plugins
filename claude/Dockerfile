@@ -6,10 +6,11 @@
 # build step.
 FROM node:24-alpine
 
-# bash for a preset that allows the Bash tool; a user for each slot of
+# bash for a preset that allows the Bash tool; git and ssh for the
+# repositories a step works on, which the server clones and pushes; a user for each slot of
 # CLAUDE_WORKERS (at most 8), who runs Claude Code; tini as PID 1, which reaps
 # what a step's processes leave when they are stopped.
-RUN apk add --no-cache bash tini \
+RUN apk add --no-cache bash tini git openssh-client \
  && addgroup -g 10001 agent \
  && for i in 1 2 3 4 5 6 7 8; do adduser -D -H -u 1000$i -G agent -s /sbin/nologin agent$i; done \
  && mkdir -p /var/lib/gosidian-claude
@@ -18,6 +19,9 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm cache clean --force
 COPY src/ ./src/
+# The code the agent plugins share (agent-kit/ of the repository), as the
+# build context kit: docker build --build-context kit=agent-kit <plugin>/.
+COPY --from=kit *.ts ./src/kit/
 COPY THIRD_PARTY_NOTICES.md /licenses/
 
 ARG VERSION=dev

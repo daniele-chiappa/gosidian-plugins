@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { execFileSync } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { parsePreset, type Preset } from "../src/preset.ts";
 import { LLMProxy } from "../src/proxy.ts";
@@ -14,7 +15,7 @@ import type { Env } from "../src/run.ts";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const PI_BIN = path.join(here, "..", "node_modules", ".bin", "pi");
 
-export function preset(baseUrl: string, extra = ""): Preset {
+export function preset(baseUrl: string, extra = "", allowed = "[read, ls, write]"): Preset {
   return parsePreset(`
 name: pi-test
 endpoint:
@@ -32,7 +33,7 @@ models:
     body:
       provider: {order: [first]}
 tools:
-  allowed: [read, ls, write]
+  allowed: ${allowed}
   default: [read, ls]
 limits:
   default: {max_turns: 6, max_seconds: 60, max_tokens: 50000, max_cost: 1}
@@ -95,4 +96,26 @@ export async function fileServer(files: Record<string, string>): Promise<{ refs:
 
 export function stepDirs(env: Env): string[] {
   return fs.readdirSync(env.runsDir);
+}
+
+const gitEnv = { ...process.env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", HOME: os.tmpdir() };
+
+// git runs git in cwd as a test's user, with a name and main as the first
+// branch.
+export function git(cwd: string, ...args: string[]): string {
+  return execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...args], { cwd, env: gitEnv, encoding: "utf8" });
+}
+
+// origin makes a bare repository with a commit on main: a.txt.
+export function origin(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-origin-"));
+  const bare = path.join(dir, "origin.git");
+  const seed = path.join(dir, "seed");
+  git(dir, "init", "--quiet", "--bare", bare);
+  git(dir, "init", "--quiet", seed);
+  fs.writeFileSync(path.join(seed, "a.txt"), "one\ntwo\n");
+  git(seed, "add", ".");
+  git(seed, "commit", "--quiet", "-m", "seed");
+  git(seed, "push", "--quiet", bare, "main");
+  return bare;
 }

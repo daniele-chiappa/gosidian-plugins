@@ -11,7 +11,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    paths: ["pi/**", ".github/workflows/pi.yml"]
+    paths: ["pi/**", "agent-kit/**", ".github/workflows/pi.yml"]
     tags: ["pi/v*.*.*"]
 
 permissions:
@@ -77,7 +77,7 @@ jobs:
         run: |
           set -eu
           docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
-            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" pi/
+            --build-context kit=agent-kit -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" pi/
           docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
 
       - name: Try it as in production

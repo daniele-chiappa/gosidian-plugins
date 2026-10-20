@@ -79,7 +79,7 @@ models:
     max_output: 16000
     cost: {input: 0.04, output: 2.3}
 default_model: mimo-v2.6-pro
-thinking: "off"
+effort: "off"
 tools:
   allowed: [read, grep, find, ls]
 limits:

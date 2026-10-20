@@ -12,7 +12,7 @@ on:
     branches: [main]
   push:
     branches: [main]
-    paths: ["claude/**", ".github/workflows/claude.yml"]
+    paths: ["claude/**", "agent-kit/**", ".github/workflows/claude.yml"]
     tags: ["claude/v*.*.*"]
 
 permissions:
@@ -78,7 +78,7 @@ jobs:
         run: |
           set -eu
           docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
-            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" claude/
+            --build-context kit=agent-kit -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" claude/
           docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
 
       - name: Try it as in production

@@ -1,0 +1,49 @@
+# Claude Code on OpenRouter, which serves the Anthropic Messages API at
+# https://openrouter.ai/api/v1/messages for Anthropic's models and for other
+# vendors' (a key of OpenRouter's, sent as a bearer). Anthropic supports
+# Claude Code on Claude models only: another vendor's model works through
+# the gateway, unsupported, and calls tools less reliably.
+# The prices are dollars per million tokens, as OpenRouter listed them on
+# 2026-10-12 (pi's preset has the same models); the plugin adds them up for
+# max_cost and the step's cost. A model's price varies by provider.
+name: claude-openrouter
+description: Claude Code on OpenRouter
+endpoints:
+  openrouter:
+    url: https://openrouter.ai/api
+    auth: bearer
+    key_file: /run/secrets/openrouter-api-key
+    # OpenRouter's attribution headers (optional).
+    headers: {HTTP-Referer: "https://gosidian.example", X-Title: gosidian}
+version: latest
+# The name is how a node picks a model, the id OpenRouter's slug. Claude
+# Code runs on the name, and the proxy sends the id: every alias of Claude
+# Code, a background task's too, is the step's model. effort is false (no
+# --effort, and the proxy drops the one Claude Code sends) unless the
+# endpoint takes it for that model.
+models:
+  - name: sonnet-5.5
+    id: anthropic/claude-sonnet-5.5
+    context: 1000000
+    max_output: 32000
+    cost: {input: 2, output: 10}
+  - name: mimo-v2.6-pro
+    id: xiaomi/mimo-v2.6-pro
+    context: 1000000
+    max_output: 32000
+    cost: {input: 0.435, output: 0.87}
+  - name: glm-5.3
+    id: z-ai/glm-5.3
+    context: 1000000
+    max_output: 32000
+    cost: {input: 1.4, output: 4.4}
+tools:
+  allowed: [Read, Grep, Glob, Write, Edit]
+  default: [Read, Grep, Glob]
+limits:
+  default: {max_turns: 30, max_seconds: 10m, max_tokens: 500000, max_cost: 0.5}
+  max: {max_turns: 80, max_seconds: 14m, max_tokens: 3000000, max_cost: 5}
+system: |
+  You work for a pipeline of gosidian, with no person to ask: when the task
+  is unclear, say what you assumed. Answer in the language of the task, and
+  name the file a fact comes from.

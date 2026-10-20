@@ -4,6 +4,68 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.2.0] — 2026-10-20
+
+The run node keeps gosidian's common contract of the agents, `agent-run/1`:
+the settings and output of [claude](../claude) too, so a pipeline picks an
+executor without learning it. A step may work on a repository of the
+preset, and use gosidian's MCP with a token of the call. A preset of 0.1
+works as it is; the run's output changes in one field (below).
+
+### Added
+- **The contract `agent-run/1`** (the node `run` declares it): the setting
+  `effort`, pi's thinking level by the contract's name, and `access`
+  (`read`: read, grep, find, ls; `edit`: also edit, write; `exec`: also
+  bash; the tools of the level the preset allows, which `tools` narrows; a
+  level whose own tools the preset allows none of fails the node, naming
+  them); the output's `cost` (pi's sum at the preset's prices) and
+  `cost_source` (`agent`, or `none` for a model without prices), and
+  `executor` (the plugin and pi, with their versions). A preset names its
+  default level `effort` too.
+- **Repositories**: a preset's `repos`, the closed list a step may work
+  on (URL, deploy key and pinned host keys over SSH, base branch, the
+  prefix of the steps' branches, the protected ones, the author, the
+  limits, pull requests on Gitea), and the node's `repo` (`name`, `base`,
+  `branch`, `push`, `pr`). The server clones the repository into `repo/`
+  on a branch of the step's own (`agent/<run>-<step>`), the agent edits its
+  files, and when the step ends well the server commits what changed (the
+  preset and the task's first line, the answer, gosidian's project and
+  run), pushes the branch and opens the pull request; the output's `repo`
+  says what. The agent reads neither the deploy key nor anything it could
+  push with, and cannot write the git folder, move `repo/`, commit or
+  push; a hard link, a file that is not a plain one, or more files or bytes
+  than the preset allows commit nothing, and a step that fails commits
+  nothing. The manifest lists the repositories' hosts in
+  `permissions.network`. The image has git and openssh-client.
+- **gosidian's MCP**: a preset's `mcp` (`read`, `write`) makes the node
+  `mcp: true` and asks for `permissions.mcp`; the node's `mcp` (`none`,
+  `read`, `write`) has pi reach gosidian's MCP over streamable HTTP with
+  the token gosidian hands for the call (`gosidian/mcp_url`,
+  `gosidian/mcp_token` in its `_meta`). pi loads its built-in MCP
+  extension alone, with gosidian's tools declared as its own
+  (`mcp__gosidian__<tool>`) and no codemode. The token is only in pi's
+  environment, which `mcp.json` names, never in its arguments or a file;
+  the plugin checks that gosidian takes it before pi starts. The output's
+  `mcp` gives the level and the endpoint.
+- `scripts/test.sh`: the type check and the tests in a throwaway
+  node:24-alpine, with git. The separation test also runs a step with
+  gosidian's MCP and two on a repository, on a git server over SSH.
+
+### Changed
+- **The run's `model` is an object**, `{name, id, endpoint}`: it was the
+  model's name, a string, which is now `model.name`; `endpoint` is the
+  host of the preset's endpoint.
+- pi's folder for a step is sticky, and its files (the model, the
+  settings, gosidian's MCP) are the server's: the agent cannot change
+  them, which a JSON retry would read again. The working folder is sticky
+  too.
+
+### Deprecated
+- `thinking`, in the node's settings and in the preset: it is `effort`
+  now, and still read in 0.2.
+- `usage.cost` in the run's output: it is `cost` now, and still given in
+  0.2.
+
 ## [0.1.2] — 2026-10-17
 
 Dependency updates; nothing changes for gosidian. The manifest is the same

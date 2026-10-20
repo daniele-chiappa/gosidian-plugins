@@ -4,4 +4,4 @@ name: claude-smoke
 credentials:
   oauth_token_file: /run/secrets/claude-oauth-token
 limits:
-  default: {max_turns: 3, max_seconds: 180, max_budget_usd: 0.5}
+  default: {max_turns: 3, max_seconds: 180, max_cost: 0.5}

@@ -1,17 +1,34 @@
 // The preset of an agent: the endpoint and its key, the models, the tools
-// it may use and the limits of a step. One container serves one preset,
-// and registers in gosidian under the preset's name.
+// it may use, the limits of a step, the repositories a step may work on and
+// the access to gosidian's MCP it may ask for. One container serves one
+// preset, and registers in gosidian under the preset's name.
 import fs from "node:fs";
 import YAML from "yaml";
 import { Ajv } from "ajv";
+import { ACCESS, MCP_LEVELS, toolsFor, type Access } from "./kit/contract.ts";
+import { hostsOf, parseRepos, reposSchema, type Repo } from "./kit/repos.ts";
+import { repoSettingSchema } from "./kit/git.ts";
 
-export const THINKING = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
-export type Thinking = (typeof THINKING)[number];
+// pi's thinking levels (--thinking): agent-run/1 calls them effort.
+export const EFFORTS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+export type Effort = (typeof EFFORTS)[number];
 
 // The tools of pi a preset may allow. bash, edit and write change the
 // workspace or run commands: a preset allows them on purpose.
 export const TOOLS = ["read", "grep", "find", "ls", "bash", "edit", "write"] as const;
 export const READ_ONLY = ["read", "grep", "find", "ls"];
+
+// The tools each level of agent-run/1's access adds: read and search, also
+// write, also run commands. A step gets those of its level and the levels
+// under it that the preset allows.
+export const ACCESS_TOOLS: Record<Access, string[]> = {
+  read: READ_ONLY,
+  edit: ["edit", "write"],
+  exec: ["bash"],
+};
+
+// The levels of gosidian's MCP a preset may grant a step: none is always.
+export type MCPGrant = Exclude<(typeof MCP_LEVELS)[number], "none">;
 
 export interface Limits {
   max_turns: number;
@@ -51,11 +68,16 @@ export interface Preset {
   };
   models: Model[];
   default_model: string;
-  thinking: Thinking;
+  // effort is the default thinking level of a step.
+  effort: Effort;
   tools: { allowed: string[]; default: string[] };
   limits: { default: Limits; max: Limits };
   system: string;
   skills: string[];
+  // repos are the repositories a step may work on; mcp the levels of
+  // gosidian's MCP a step may ask for (none: no MCP).
+  repos: Repo[];
+  mcp: MCPGrant[];
 }
 
 const limitsSchema = {
@@ -117,7 +139,9 @@ const presetSchema = {
       },
     },
     default_model: { type: "string" },
-    thinking: { enum: [...THINKING] },
+    effort: { enum: [...EFFORTS] },
+    // Deprecated: effort.
+    thinking: { enum: [...EFFORTS] },
     tools: {
       type: "object",
       additionalProperties: false,
@@ -133,6 +157,8 @@ const presetSchema = {
     },
     system: { type: "string" },
     skills: { type: "array", items: { type: "string" } },
+    repos: reposSchema,
+    mcp: { type: "array", items: { enum: MCP_LEVELS.filter((l) => l !== "none") }, uniqueItems: true },
   },
 };
 
@@ -187,6 +213,7 @@ export function parsePreset(text: string, file = "preset"): Preset {
     if (!allowed.includes(t)) throw new Error(`${file}: the default tool ${t} is not allowed`);
   }
   if (raw.endpoint.api_key_env && raw.endpoint.api_key_file) throw new Error(`${file}: endpoint has api_key_env and api_key_file: one of them`);
+  if (raw.effort !== undefined && raw.thinking !== undefined) throw new Error(`${file}: effort and thinking (deprecated) are the same setting: give effort only`);
   const max = limits(raw.limits?.max, MAX_LIMITS, `${file}: limits.max`);
   const dflt = limits(raw.limits?.default, DEFAULT_LIMITS, `${file}: limits.default`);
   for (const k of Object.keys(max) as (keyof Limits)[]) {
@@ -203,11 +230,13 @@ export function parsePreset(text: string, file = "preset"): Preset {
     },
     models,
     default_model: defaultModel,
-    thinking: raw.thinking ?? "off",
+    effort: raw.effort ?? raw.thinking ?? "off",
     tools: { allowed, default: def },
     limits: { default: dflt, max },
     system: raw.system ?? "",
     skills: raw.skills ?? [],
+    repos: parseRepos(raw.repos, file),
+    mcp: raw.mcp ?? [],
   };
 }
 
@@ -215,10 +244,42 @@ export function loadPreset(file: string): Preset {
   return parsePreset(fs.readFileSync(file, "utf8"), file);
 }
 
-// nodeSchema is the JSON Schema of the run node's settings, from the preset:
-// the models and tools it has, the limits it allows.
+// endpointOf names the preset's endpoint in a step's output: its host.
+export function endpointOf(p: Preset): string {
+  return new URL(p.endpoint.base_url).host;
+}
+
+// accessTools are the tools of an access level, within the preset's: a
+// level whose own tools the preset allows none of is an error that names
+// them.
+export function accessTools(p: Preset, level: Access): string[] {
+  return toolsFor(level, ACCESS_TOOLS, p.tools.allowed);
+}
+
+// accessLevels are the levels of access the preset can give.
+export function accessLevels(p: Preset): Access[] {
+  return ACCESS.filter((l) => {
+    try {
+      accessTools(p, l);
+      return true;
+    } catch {
+      return false;
+    }
+  });
+}
+
+// hostsOfPreset are the hosts the server calls: gosidian, the endpoint,
+// the repositories.
+export function hostsOfPreset(p: Preset): string[] {
+  return [...new Set(["gosidian", endpointOf(p), ...hostsOf(p.repos)])];
+}
+
+// nodeSchema is the JSON Schema of the run node's settings, agent-run/1's,
+// from the preset: the models and tools it has, the limits it allows, its
+// repositories and the access to gosidian's MCP it grants.
 export function nodeSchema(p: Preset): Record<string, unknown> {
   const max = p.limits.max;
+  const levels = accessLevels(p);
   return {
     type: "object",
     additionalProperties: false,
@@ -228,7 +289,8 @@ export function nodeSchema(p: Preset): Record<string, unknown> {
       system: { type: "string", description: "Instructions added to the agent's system prompt" },
       system_mode: { enum: ["append", "replace"], default: "append", description: "append to pi's system prompt, or replace it" },
       model: { enum: p.models.map((m) => m.name), default: p.default_model },
-      thinking: { enum: [...THINKING], default: p.thinking },
+      effort: { enum: [...EFFORTS], default: p.effort, description: "pi's thinking level (--thinking); a model without reasoning thinks not at all" },
+      thinking: { enum: [...EFFORTS], deprecated: true, description: "Deprecated: effort" },
       // As a pipeline writes it: gosidian hands the tool references instead.
       files: {
         description: "Files of the project the agent works on, in its in/ folder: a vault path, or a list of them",
@@ -237,7 +299,8 @@ export function nodeSchema(p: Preset): Record<string, unknown> {
           { type: "array", maxItems: 100, items: { anyOf: [{ type: "string" }, { type: "object", required: ["path"] }] } },
         ],
       },
-      tools: { type: "array", items: { enum: p.tools.allowed }, uniqueItems: true, default: p.tools.default },
+      ...(levels.length ? { access: { enum: levels, description: "read: read, grep, find, ls; edit: also edit, write; exec: also bash; those the preset allows" } } : {}),
+      tools: { type: "array", items: { enum: p.tools.allowed }, uniqueItems: true, default: p.tools.default, description: "pi's tools the agent may use, within the preset's; with access, within its tools (default: access's, else the preset's default)" },
       temperature: { type: "number", minimum: 0, maximum: 2 },
       max_output: { type: "integer", minimum: 1, description: "Tokens of one response, at most the model's" },
       max_turns: { type: "integer", minimum: 1, maximum: max.max_turns, default: p.limits.default.max_turns },
@@ -252,6 +315,14 @@ export function nodeSchema(p: Preset): Record<string, unknown> {
         default: false,
         description: "Put the text files in the prompt too (256 KiB together at most), for a model that reads them badly with its tools",
       },
+      ...(p.repos.length ? { repo: repoSettingSchema(p.repos) } : {}),
+      mcp: {
+        enum: ["none", ...p.mcp],
+        default: "none",
+        description: p.mcp.length
+          ? "gosidian's MCP for the call, with a token of the run's project that lasts the call: read, or write (reads too)"
+          : "gosidian's MCP for the call: the preset grants none",
+      },
     },
   };
 }
@@ -261,10 +332,13 @@ export const outputSchema = {
   properties: {
     text: { type: "string" },
     json: {},
-    model: { type: "string" },
-    stop: { enum: ["done", "length"] },
+    model: {
+      type: "object",
+      description: "The model the step ran on: the preset's name, the endpoint's id, the endpoint (its host)",
+      properties: { name: { type: "string" }, id: { type: "string" }, endpoint: { type: "string" } },
+    },
+    stop: { enum: ["done", "length"], description: "length: the model's last answer was cut at its output tokens" },
     turns: { type: "integer" },
-    tools: { type: "object", additionalProperties: { type: "integer" } },
     usage: {
       type: "object",
       properties: {
@@ -273,9 +347,32 @@ export const outputSchema = {
         cache_read: { type: "integer" },
         cache_write: { type: "integer" },
         total_tokens: { type: "integer" },
-        cost: { type: "number" },
+        cost: { type: "number", deprecated: true, description: "Deprecated: cost" },
       },
     },
+    cost: { type: "number", description: "US dollars, as pi adds them up at the preset's prices" },
+    cost_source: { enum: ["agent", "none"], description: "agent: pi's, at the preset's prices; none: the model has no prices" },
+    tools: { type: "object", additionalProperties: { type: "integer" }, description: "Calls per tool" },
+    executor: {
+      type: "object",
+      properties: { plugin: { type: "string" }, version: { type: "string" }, agent: { type: "string" }, agent_version: { type: "string" } },
+    },
+    repo: {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+        base: { type: "string" },
+        branch: { type: "string" },
+        commit: { type: "string" },
+        changed: { type: "integer" },
+        insertions: { type: "integer" },
+        deletions: { type: "integer" },
+        pushed: { type: "boolean" },
+        pr_url: { type: "string" },
+        note: { type: "string" },
+      },
+    },
+    mcp: { type: "object", properties: { level: { enum: ["read", "write"] }, url: { type: "string" } } },
     skipped: { type: "array" },
   },
 };

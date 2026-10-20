@@ -1,7 +1,9 @@
 // gosidian-pi: a gosidian plugin whose node runs a pi agent (pi.dev) on the
-// files a pipeline hands it. One container is one agent: its preset names
-// the endpoint and its key, the models, the tools it may use and the
-// limits of a step. MCP at /mcp (Streamable HTTP, stateless), GET /health.
+// files a pipeline hands it, and keeps agent-run/1, the contract of
+// gosidian's agents. One container is one agent: its preset names the
+// endpoint and its key, the models, the tools it may use, the limits of a
+// step, the repositories a step may work on and the access to gosidian's
+// MCP it may ask for. MCP at /mcp (Streamable HTTP, stateless), GET /health.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,16 +12,14 @@ import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
-import { loadPreset, nodeSchema, outputSchema, type Preset } from "./preset.ts";
+import { CONTRACT, META } from "./kit/contract.ts";
+import { hostsOfPreset, loadPreset, nodeSchema, outputSchema, type Preset } from "./preset.ts";
 import { LLMProxy } from "./proxy.ts";
-import { runStep, StepError, type Env } from "./run.ts";
+import { PI_VERSION, runStep, StepError, VERSION, type Env } from "./run.ts";
+
+export { VERSION };
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "package.json"), "utf8"));
-export const VERSION: string = process.env.PLUGIN_VERSION || pkg.version;
-
-// The _meta field gosidian sends with the tokens the run may still use.
-const TOKENS_LEFT = "gosidian/llm_tokens_left";
 const MAX_REQUEST = 16 << 20;
 
 export function log(msg: string, fields: Record<string, unknown> = {}): void {
@@ -44,14 +44,16 @@ export function manifest(p: Preset): Record<string, unknown> {
       {
         name: "run",
         tool: "run",
-        description: `Runs the agent ${p.name} (pi) on a task and the files it names: it answers with text or JSON, and gives back the files it writes`,
+        contract: CONTRACT,
+        ...(p.mcp.length ? { mcp: true } : {}),
+        description: `Runs the agent ${p.name} (pi) on a task and the files it names${p.repos.length ? ", or a repository of its preset" : ""}: it answers with text or JSON, and gives back the files it writes${p.repos.length ? " and commits what it changed in the repository" : ""}`,
         files: ["files"],
         file_refs: true,
         input_schema: nodeSchema(p),
         output_schema: outputSchema,
       },
     ],
-    permissions: { files: true, network: ["gosidian", new URL(p.endpoint.base_url).host] },
+    permissions: { files: true, network: hostsOfPreset(p), ...(p.mcp.length ? { mcp: p.mcp } : {}) },
   };
 }
 
@@ -126,16 +128,21 @@ export async function start(opts: { preset: Preset; token: string; port: number;
         return { content: [{ type: "text", text: JSON.stringify(man) }], structuredContent: man };
       }
       if (req.params.name !== "run") return { isError: true, content: [{ type: "text", text: `no tool ${req.params.name}` }] };
-      const left = req.params._meta?.[TOKENS_LEFT];
+      const meta = (req.params._meta ?? {}) as Record<string, unknown>;
+      const left = meta[META.tokensLeft];
       const tokensLeft = typeof left === "number" ? left : undefined;
       const t0 = Date.now();
       let release: (() => void) | undefined;
       try {
         const s = await slots.take(extra.signal);
         release = s.release;
-        const res = await runStep(env, (req.params.arguments ?? {}) as Record<string, unknown>, tokensLeft, extra.signal, s.slot);
+        const res = await runStep(env, (req.params.arguments ?? {}) as Record<string, unknown>, tokensLeft, extra.signal, s.slot, meta);
         const o: any = res.output;
-        log("step done", { model: o.model, turns: o.turns, tokens: o.usage.total_tokens, cost: o.usage.cost, files: res.files.length, seconds: (Date.now() - t0) / 1000 });
+        log("step done", {
+          model: o.model.name, turns: o.turns, tokens: o.usage.total_tokens, cost: o.cost, files: res.files.length, seconds: (Date.now() - t0) / 1000,
+          ...(o.repo ? { repo: o.repo.name, branch: o.repo.branch, commit: o.repo.commit ?? null, pushed: o.repo.pushed } : {}),
+          ...(o.mcp ? { mcp: o.mcp.level } : {}),
+        });
         return {
           structuredContent: res.output,
           content: [
@@ -250,7 +257,10 @@ async function main(): Promise<void> {
       log,
     },
   });
-  log("gosidian-pi ready", { agent: preset.name, version: VERSION, port: int("PORT", 8000), models: preset.models.map((m) => m.name), tools: preset.tools.allowed, separate_user: root, token: Boolean(process.env.GOSIDIAN_PLUGIN_TOKEN) });
+  log("gosidian-pi ready", {
+    agent: preset.name, version: VERSION, pi: PI_VERSION, port: int("PORT", 8000), models: preset.models.map((m) => m.name), tools: preset.tools.allowed,
+    repos: preset.repos.map((r) => r.name), mcp: preset.mcp, separate_user: root, token: Boolean(process.env.GOSIDIAN_PLUGIN_TOKEN),
+  });
   const stop = () => {
     void app.close().then(() => process.exit(0));
   };

@@ -139,6 +139,9 @@ export interface VersionsOptions {
   channel: string;
   // aliases are the preset's models a probe runs.
   aliases: string[];
+  // noProbe says why there is nothing to probe: a preset without an
+  // Anthropic endpoint has no aliases of Claude Code.
+  noProbe?: string;
   // keep is how many versions stay installed at most (the one in use, the
   // one before it and the newest among them).
   keep?: number;
@@ -441,6 +444,7 @@ export class Versions {
       aliases: m?.probe?.aliases ?? {},
       probed_at: m?.probe?.at ?? null,
       ...(m?.probe && !m.probe.ok ? { probe_error: m.probe.error } : {}),
+      ...(this.o.noProbe ? { probe_skipped: this.o.noProbe } : {}),
       effort_levels: m?.effort_levels ?? [],
       installed_versions: this.installed(),
       state: this.phase,

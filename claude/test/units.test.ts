@@ -1,7 +1,7 @@
 // The pieces without a process: the event stream (recorded from Claude Code
 // 2.1.301 against a fake API), the preset and its node schema, the
-// settings and arguments of a step, the versions, the subscription's
-// limits, the JSON of an answer.
+// settings and arguments of a step, its repository and gosidian's MCP, the
+// versions, the subscription's limits, the JSON of an answer.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,15 +10,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Lines, StreamState, mainModel } from "../src/events.ts";
 import { check, extractJSON } from "../src/schema.ts";
-import { parsePreset, readSecret, runSchema, seconds } from "../src/preset.ts";
-import { buildArgs, buildEnv, effortOf, settingsOf, systemPrompt } from "../src/run.ts";
+import { accessTools, aliasesOf, parsePreset, readSecret, readSecrets, runSchema, seconds } from "../src/preset.ts";
+import { buildArgs, buildEnv, commitMessage, effortOf, mcpConfig, mcpOf, priceOf, settingsOf, systemPrompt, targetOf } from "../src/run.ts";
+import { stepOf } from "../src/steps.ts";
 import { compareVersions, isVersion, RWLock } from "../src/versions.ts";
 import { effortLevels, findBinary } from "../src/npm.ts";
 import { fromEndpoint, fromHeaders, rateLimitHeaderNames, Subscription } from "../src/subscription.ts";
 import { safeName } from "../src/files.ts";
-import { preset } from "./helpers.ts";
+import { PRICES, preset, twoEndpoints } from "./helpers.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+const withTools = (allowed: string) => parsePreset(`name: x\ncredentials: {oauth_token_file: /t}\ntools: {allowed: ${allowed}}\n`);
 const fixture = (name: string) => {
   const st = new StreamState();
   const l = new Lines();
@@ -43,6 +45,7 @@ test("a recorded session: the result, the structured output, the usage, the deni
   assert.equal(st.init?.model, "claude-haiku-5-5");
   assert.equal(st.init?.version, "2.1.301");
   assert.deepEqual(st.init?.tools, ["Glob", "Grep", "Read", "StructuredOutput", "Write"]);
+  assert.deepEqual(st.init?.mcp, {});
   assert.equal(st.turns, 3);
   const o = st.outcome()!;
   assert.equal(o.subtype, "success");
@@ -54,6 +57,8 @@ test("a recorded session: the result, the structured output, the usage, the deni
   assert.ok(Math.abs(o.cost - 0.00008625) < 1e-12);
   assert.deepEqual(o.denials, [{ tool: "Write", input: '{"file_path":"/tmp/s/work/out/r.md","content":"x"}' }]);
   assert.equal(o.terminal, "completed");
+  assert.equal(o.stop, "tool_use");
+  assert.deepEqual(st.tools, { Read: 1, Write: 1, StructuredOutput: 1 }, "the calls, a denied one too");
 });
 
 test("a recorded session that stops at max_turns", () => {
@@ -65,6 +70,12 @@ test("a recorded session that stops at max_turns", () => {
   assert.equal(new StreamState().outcome(), undefined);
 });
 
+test("the init event: the state of each MCP server", () => {
+  const st = new StreamState();
+  st.feed({ type: "system", subtype: "init", model: "m", tools: ["Read", "mcp__gosidian__memory_get"], mcp_servers: [{ name: "gosidian", status: "connected", source: "dynamic" }] });
+  assert.deepEqual(st.init?.mcp, { gosidian: "connected" });
+});
+
 test("mainModel: the init model when it was used, else the one that wrote the most", () => {
   const mu = { "claude-haiku-5-5": { outputTokens: 5 }, "claude-opus-5-5": { outputTokens: 900 } };
   assert.equal(mainModel(mu, "claude-haiku-5-5"), "claude-haiku-5-5");
@@ -74,16 +85,21 @@ test("mainModel: the init model when it was used, else the one that wrote the mo
 
 test("a preset gets its defaults", () => {
   const p = parsePreset("name: claude\ncredentials: {oauth_token_file: /run/secrets/t}\n");
-  assert.deepEqual(p.models, ["haiku", "sonnet", "opus"]);
+  assert.deepEqual(p.models.map((m) => m.name), ["haiku", "sonnet", "opus"]);
+  assert.deepEqual(p.models[0], { name: "haiku", endpoint: "anthropic", id: "haiku", effort: true });
   assert.deepEqual(p.tools, { allowed: ["Read", "Grep", "Glob"], default: ["Read", "Grep", "Glob"] });
   assert.deepEqual(p.effort, { allowed: ["low", "medium", "high", "xhigh", "max"] });
   assert.equal(p.version, "latest");
-  assert.equal(p.upstream, "https://api.anthropic.com");
-  assert.deepEqual(p.credentials, { kind: "oauth", file: "/run/secrets/t", env: undefined });
-  assert.deepEqual(p.limits.default, { max_turns: 20, max_seconds: 600, max_budget_usd: 1 });
+  assert.deepEqual(p.endpoints, { anthropic: { name: "anthropic", url: "https://api.anthropic.com", auth: "oauth", key_file: "/run/secrets/t", key_env: undefined, headers: {} } }, "credentials and upstream are the endpoint anthropic");
+  assert.deepEqual(p.limits.default, { max_turns: 20, max_seconds: 600, max_tokens: 300_000, max_cost: 1 });
+  assert.deepEqual(p.limits.max, { max_turns: 100, max_seconds: 840, max_tokens: 2_000_000, max_cost: 10 });
   assert.deepEqual(p.limits.min_left_percent, { session: 0, week: 0 });
-  const k = parsePreset("name: claude\ncredentials: {api_key_env: ANTHROPIC_KEY}\ntools: {allowed: [Read, Write, Bash]}\nlimits: {default: {max_seconds: 5m}}\n");
-  assert.equal(k.credentials.kind, "api_key");
+  assert.deepEqual(aliasesOf(p), ["haiku", "sonnet", "opus"]);
+  const k = parsePreset("name: claude\ncredentials: {api_key_env: ANTHROPIC_KEY}\nupstream: http://api.lan/\ntools: {allowed: [Read, Write, Bash]}\nlimits: {default: {max_seconds: 5m, max_budget_usd: 0.5}}\n");
+  assert.equal(k.endpoints.anthropic.auth, "api_key");
+  assert.equal(k.endpoints.anthropic.key_env, "ANTHROPIC_KEY");
+  assert.equal(k.endpoints.anthropic.url, "http://api.lan");
+  assert.equal(k.limits.default.max_cost, 0.5, "max_budget_usd (deprecated) is max_cost");
   assert.deepEqual(k.tools.default, ["Read"], "the default tools are the read-only ones among those allowed");
   assert.equal(k.limits.default.max_seconds, 300);
   assert.equal(seconds("1h", "x"), 3600);
@@ -104,6 +120,57 @@ test("a preset refuses what does not hold", () => {
     [base + "limits: {min_left_percent: {session: 120}}", /must be <= 100/],
     ["name: x\ncredentials: {api_key_file: /k}\nlimits: {min_left_percent: {week: 10}}", /needs a subscription/],
     [base + "models: [sonnet, sonnet]", /duplicate/],
+    [base + "limits: {default: {max_cost: 1, max_budget_usd: 1}}", /max_cost and max_budget_usd/],
+    [base + "limits: {max: {max_tokens: 100000}}", /limits.default.max_tokens 300000 is over limits.max.max_tokens 100000/],
+    [base + "mcp: [admin]", /allowed values/],
+    [base + "mcp: [none]", /allowed values/],
+    [base + "repos: [{name: App, url: /srv/app.git}]", /pattern/],
+    [base + "repos: [{name: app}]", /required property 'url'/],
+    [base + "repos: [{name: app, url: /a.git}, {name: app, url: /b.git}]", /repos app twice/],
+    [base + "repos: [{name: app, url: \"git@git.example.com:team/app.git\"}]", /deploy key/],
+  ] as const) {
+    assert.throws(() => parsePreset(bad), why, bad);
+  }
+});
+
+test("a preset with endpoints: models on each, their ids, prices and effort", () => {
+  const p = twoEndpoints("http://a.test", "http://b.test");
+  assert.deepEqual(Object.keys(p.endpoints), ["anthropic", "local"]);
+  assert.deepEqual(p.endpoints.local, { name: "local", url: "http://b.test/api", auth: "bearer", key_file: undefined, key_env: "LOCAL_KEY", headers: { "HTTP-Referer": "https://gosidian.test", "X-Title": "gosidian" } });
+  assert.deepEqual(p.models, [
+    { name: "sonnet", endpoint: "anthropic", id: "sonnet", effort: true },
+    { name: "qwen", endpoint: "local", id: "qwen/qwen3-coder", context: 65536, max_output: 8192, cost: PRICES, effort: false },
+    { name: "free", endpoint: "local", id: "llama:8b", effort: false },
+  ]);
+  assert.deepEqual(aliasesOf(p), ["sonnet"], "the aliases of Anthropic's endpoint only");
+  const one = parsePreset("name: x\nendpoints: {or: {url: https://openrouter.ai/api, auth: bearer, key_file: /k}}\nmodels: [{name: sonnet-or, id: anthropic/claude-sonnet-4.5, effort: true, cost: {input: 3}}]\n");
+  assert.deepEqual(one.models[0], { name: "sonnet-or", endpoint: "or", id: "anthropic/claude-sonnet-4.5", cost: { input: 3, output: 0, cache_read: 0, cache_write: 0 }, effort: true }, "the only endpoint; prices not given are 0");
+  assert.deepEqual(aliasesOf(one), []);
+  const both = parsePreset("name: x\nendpoints:\n  claude: {url: https://api.anthropic.com, auth: api_key, key_env: K}\n  ollama: {url: http://gpu.lan:11434, auth: none}\nmodels: [opus, {name: qwen, endpoint: ollama, id: \"qwen3-coder:30b\"}]\n");
+  assert.deepEqual(both.models.map((m) => [m.name, m.endpoint, m.effort]), [["opus", "claude", true], ["qwen", "ollama", false]]);
+  assert.deepEqual(readSecrets(both, { K: "sk-k" }), { claude: "sk-k", ollama: "" });
+  assert.throws(() => readSecrets(both, {}), /endpoint claude: the preset's credential is in K, which is not set/);
+  const ep = "name: x\nendpoints:\n  a: {url: http://a, auth: oauth, key_env: T}\n  b: {url: http://b, auth: none}\n";
+  for (const [bad, why] of [
+    [ep + "credentials: {oauth_token_file: /t}", /endpoints replaces credentials and upstream/],
+    [ep + "upstream: http://x", /endpoints replaces credentials and upstream/],
+    ["name: x\nendpoints: {}", /fewer than 1 properties/],
+    ["name: x\nendpoints: {b: {url: ftp://b, auth: none}}", /pattern/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: token}}", /allowed values/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: bearer}}", /auth bearer needs its key in one of key_file and key_env/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: bearer, key_file: /k, key_env: K}}", /one of key_file and key_env/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: none, key_env: K}}", /auth none takes no key/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: none, headers: {Authorization: Bearer x}}}\nmodels: [{name: m}]", /Authorization is not a header a preset sets/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: none, headers: {X-Api-Key: x}}}\nmodels: [{name: m}]", /X-Api-Key is not a header/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: none}}", /no Anthropic endpoint.*list its models/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: none}}\nmodels: [sonnet]", /a name alone is a model of an Anthropic endpoint/],
+    [ep + "models: [{name: m}]", /which endpoint\? one of a, b/],
+    [ep + "models: [{name: m, endpoint: c}]", /no endpoint c/],
+    [ep + "models: [{name: m, endpoint: b}, {name: m, endpoint: a}]", /duplicate name m/],
+    [ep + "models: [{name: m, endpoint: b, id: a b}]", /pattern/],
+    [ep + "models: [{name: anthropic/claude, endpoint: b}]", /pattern/],
+    ["name: x\nendpoints:\n  a: {url: http://a, auth: oauth, key_env: T}\n  b: {url: http://b, auth: oauth, key_env: U}", /at most one has auth oauth/],
+    ["name: x\nendpoints: {b: {url: http://b, auth: api_key, key_env: K}}\nlimits: {min_left_percent: {session: 10}}", /needs a subscription/],
   ] as const) {
     assert.throws(() => parsePreset(bad), why, bad);
   }
@@ -113,11 +180,12 @@ test("readSecret reads the credential from its file or variable, one line", () =
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-secret-"));
   const f = path.join(dir, "t");
   fs.writeFileSync(f, "sk-ant-oat01-abc\n");
-  assert.equal(readSecret({ kind: "oauth", file: f }), "sk-ant-oat01-abc");
-  assert.equal(readSecret({ kind: "api_key", env: "K" }, { K: " sk-x " }), "sk-x");
-  assert.throws(() => readSecret({ kind: "api_key", env: "K" }, {}), /not set/);
+  assert.equal(readSecret({ key_file: f }), "sk-ant-oat01-abc");
+  assert.equal(readSecret({ key_env: "K" }, { K: " sk-x " }), "sk-x");
+  assert.throws(() => readSecret({ key_env: "K" }, {}), /not set/);
+  assert.equal(readSecret({}), "", "an endpoint without a key");
   fs.writeFileSync(f, "a b\n");
-  assert.throws(() => readSecret({ kind: "oauth", file: f }), /one line/);
+  assert.throws(() => readSecret({ key_file: f }), /one line/);
   fs.rmSync(dir, { recursive: true });
 });
 
@@ -130,18 +198,51 @@ test("the run node's schema follows the preset", () => {
   assert.deepEqual(s.properties.tools.items.enum, ["Read", "Grep", "Glob", "Write"]);
   assert.deepEqual(s.properties.tools.default, ["Read", "Grep", "Glob"]);
   assert.equal(s.properties.max_turns.maximum, 20);
-  assert.equal(s.properties.max_budget_usd.maximum, 2);
+  assert.equal(s.properties.max_tokens.maximum, 2_000_000);
+  assert.equal(s.properties.max_tokens.default, 300_000);
+  assert.equal(s.properties.max_cost.maximum, 2);
+  assert.equal(s.properties.max_cost.default, 1);
+  assert.equal(s.properties.max_budget_usd.deprecated, true);
+  assert.deepEqual(s.properties.system_mode, { enum: ["append", "replace"], default: "append", description: s.properties.system_mode.description });
+  assert.deepEqual(s.properties.access.enum, ["read", "edit"], "the levels the preset can give: no Bash, no exec");
+  for (const k of ["repo", "mcp"]) assert.equal(s.properties[k], undefined, k);
+  const all: any = runSchema(withTools("[Read, Grep, Glob, Write, Edit, Bash]"));
+  assert.deepEqual(all.properties.access.enum, ["read", "edit", "exec"]);
+  const none: any = runSchema(withTools("[WebFetch]"));
+  assert.equal(none.properties.access, undefined, "no level at all");
+});
+
+test("access: the tools of each level the preset allows, or those missing", () => {
+  const p = withTools("[Read, Grep, Write, Bash]");
+  assert.deepEqual(accessTools(p, "read"), { tools: ["Read", "Grep"], missing: [] });
+  assert.deepEqual(accessTools(p, "edit"), { tools: ["Read", "Grep", "Write"], missing: [] });
+  assert.deepEqual(accessTools(p, "exec"), { tools: ["Read", "Grep", "Write", "Bash"], missing: [] });
+  const ro = withTools("[Read, Grep, Glob]");
+  assert.deepEqual(accessTools(ro, "edit"), { tools: ["Read", "Grep", "Glob"], missing: ["Write", "Edit"] });
+  assert.deepEqual(accessTools(ro, "exec").missing, ["Bash"]);
+  assert.deepEqual(settingsOf(p, { prompt: "x", access: "edit" }).tools, ["Read", "Grep", "Write"]);
+  assert.deepEqual(settingsOf(p, { prompt: "x", access: "exec", tools: ["Read", "Bash"] }).tools, ["Read", "Bash"], "tools narrow access");
+  assert.deepEqual(settingsOf(p, { prompt: "x", tools: ["Bash"] }).tools, ["Bash"], "tools alone");
+  assert.throws(() => settingsOf(ro, { prompt: "x", access: "edit" }), /with\.access edit needs Write or Edit, which the preset does not allow/);
+  assert.throws(() => settingsOf(p, { prompt: "x", access: "edit", tools: ["Bash"] }), /with\.tools: Bash not within access edit \(Read, Grep, Write\)/);
+  assert.throws(() => settingsOf(p, { prompt: "x", access: "all" }), /allowed values/);
 });
 
 test("settingsOf fills the defaults and refuses what the preset does not allow", () => {
   const p = preset("http://api.test");
-  assert.deepEqual(settingsOf(p, { prompt: "x", files: [{ url: "u" }] }), { prompt: "x", model: "sonnet", tools: ["Read", "Grep", "Glob"], max_turns: 6, max_seconds: 60, max_budget_usd: 1 });
+  assert.deepEqual(settingsOf(p, { prompt: "x", files: [{ url: "u" }] }), { prompt: "x", system_mode: "append", model: "sonnet", tools: ["Read", "Grep", "Glob"], max_turns: 6, max_seconds: 60, max_tokens: 300_000, max_cost: 1 });
+  assert.equal(settingsOf(p, { prompt: "x", max_budget_usd: 0.5 }).max_cost, 0.5, "max_budget_usd (deprecated) is max_cost");
+  assert.equal((settingsOf(p, { prompt: "x", max_budget_usd: 0.5 }) as any).max_budget_usd, undefined);
   for (const [args, why] of [
     [{ prompt: "x", model: "opus" }, /allowed values/],
     [{ prompt: "x", tools: ["Bash"] }, /allowed values/],
     [{ prompt: "x", effort: "ultra" }, /allowed values/],
     [{ prompt: "x", max_turns: 99 }, /must be <= 20/],
     [{ prompt: "x", max_budget_usd: 0 }, /must be > 0/],
+    [{ prompt: "x", max_budget_usd: 3 }, /max_cost must be <= 2/],
+    [{ prompt: "x", max_cost: 1, max_budget_usd: 1 }, /max_cost and max_budget_usd/],
+    [{ prompt: "x", max_tokens: 3_000_000 }, /must be <= 2000000/],
+    [{ prompt: "x", system_mode: "prepend" }, /allowed values/],
     [{ prompt: "x", schema: { type: "nope" } }, /not a JSON Schema/],
     [{ prompt: "" }, /fewer than 1 characters/],
     [{ prompt: "x", other: 1 }, /additional properties/],
@@ -153,7 +254,7 @@ test("settingsOf fills the defaults and refuses what the preset does not allow",
 test("buildArgs: print mode, the limits, only the node's tools, nothing from disk", () => {
   const p = preset("http://api.test");
   const s = settingsOf(p, { prompt: "x", model: "haiku", effort: "high", tools: ["Read", "Write"], schema: { type: "object" } });
-  assert.deepEqual(buildArgs(s, "/s/system.md"), [
+  assert.deepEqual(buildArgs(s, targetOf(p, s.model), "/s/system.md"), [
     "-p",
     "--output-format", "stream-json", "--verbose",
     "--model", "haiku",
@@ -173,11 +274,22 @@ test("buildArgs: print mode, the limits, only the node's tools, nothing from dis
     "--append-system-prompt-file", "/s/system.md",
     "--json-schema", '{"type":"object"}',
   ]);
-  const none = buildArgs(settingsOf(p, { prompt: "x", tools: [] }), "/s");
+  const none = buildArgs(settingsOf(p, { prompt: "x", tools: [] }), targetOf(p, "sonnet"), "/s");
   assert.equal(none[none.indexOf("--tools") + 1], "", "no tools at all");
   assert.ok(!none.includes("--allowedTools"));
   assert.ok(!none.includes("--effort"), "no effort: Claude Code's own");
   assert.ok(!none.includes("--json-schema"));
+  const replace = buildArgs(settingsOf(p, { prompt: "x", system_mode: "replace" }), targetOf(p, "sonnet"), "/s/system.md");
+  assert.equal(replace[replace.indexOf("--system-prompt-file") + 1], "/s/system.md");
+  assert.ok(!replace.includes("--append-system-prompt-file"));
+  // A compatible endpoint: the model's name, no effort (the preset's
+  // effort: false), no dollars of Claude Code's.
+  const two = twoEndpoints("http://a.test", "http://b.test");
+  const q = buildArgs(settingsOf(two, { prompt: "x", model: "qwen", effort: "high" }), targetOf(two, "qwen"), "/s");
+  assert.equal(q[q.indexOf("--model") + 1], "qwen");
+  assert.ok(!q.includes("--effort"));
+  assert.ok(!q.includes("--max-budget-usd"));
+  assert.throws(() => targetOf(two, "nope"), /no model nope/);
 });
 
 test("buildEnv is the whole environment of Claude Code", () => {
@@ -188,6 +300,23 @@ test("buildEnv is the whole environment of Claude Code", () => {
   const e = buildEnv("/h", "http://127.0.0.1:1", "sk-step");
   assert.equal(e.ANTHROPIC_API_KEY, "sk-step");
   assert.equal(e.DISABLE_AUTOUPDATER, "1");
+  const two = twoEndpoints("http://a.test", "http://b.test");
+  assert.deepEqual(buildEnv("/h", "http://127.0.0.1:1", "sk-step", targetOf(two, "sonnet")), e, "Anthropic's endpoint adds nothing");
+  const q = buildEnv("/h", "http://127.0.0.1:1", "sk-step", targetOf(two, "qwen"));
+  assert.deepEqual(Object.fromEntries(Object.entries(q).filter(([k]) => !(k in e))), {
+    ANTHROPIC_DEFAULT_OPUS_MODEL: "qwen",
+    ANTHROPIC_DEFAULT_SONNET_MODEL: "qwen",
+    ANTHROPIC_DEFAULT_HAIKU_MODEL: "qwen",
+    ANTHROPIC_DEFAULT_FABLE_MODEL: "qwen",
+    CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1",
+    CLAUDE_CODE_MAX_CONTEXT_TOKENS: "65536",
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: "8192",
+  });
+});
+
+test("priceOf: tokens at a model's prices, per million", () => {
+  assert.equal(priceOf({ input: 1_000_000, output: 500_000, cache_read: 2_000_000, cache_write: 0 }, PRICES), 1 + 1 + 0.2);
+  assert.equal(priceOf({ input: 100, output: 5, cache_read: 1000, cache_write: 50 }, { input: 0, output: 0, cache_read: 0, cache_write: 0 }), 0);
 });
 
 test("the system prompt: the workspace, the preset's, the node's", () => {
@@ -207,6 +336,8 @@ test("effortOf: the effort the requests carried, or a note", () => {
   assert.deepEqual(effortOf("high", "claude-haiku-4-5", seen), { requested: "high", applied: null, note: "claude-haiku-4-5 takes no effort level: Claude Code sent its requests without one" });
   assert.deepEqual(effortOf(undefined, "claude-sonnet-5-5", seen), { requested: null, applied: "high" });
   assert.match(effortOf("low", "claude-sonnet-5-5", seen).note!, /sent the effort high, not low/);
+  assert.deepEqual(effortOf("high", "qwen", new Map([["qwen", new Set<string | null>([null])]]), false), { requested: "high", applied: null, note: "qwen takes no effort level in the preset: the step ran without --effort" });
+  assert.deepEqual(effortOf(undefined, "qwen", new Map(), false), { requested: null, applied: null });
 });
 
 test("versions: comparing, and the effort levels of a --help", () => {
@@ -325,6 +456,10 @@ test("Subscription: the last values, the endpoint once, a ping, and min_left_per
   const key = new Subscription({ kind: "api_key", usage: async () => ({ status: 200, body: {} }), ping: async () => {} });
   assert.deepEqual(await key.read(0), { applicable: false, reason: "an API key: the limits of a subscription do not apply" });
   assert.equal(await key.shortfall({ session: 50, week: 50 }, 0), "");
+  const none = new Subscription({ kind: "none", usage: async () => ({ status: 200, body: {} }), ping: async () => {} });
+  assert.match((await none.read(0) as any).reason, /no endpoint of the preset is a subscription/);
+  none.note({ "anthropic-ratelimit-unified-5h-utilization": "0.5" });
+  assert.equal(none.latest, undefined);
 });
 
 test("extractJSON finds the value, bare, fenced or inside prose; check validates it", () => {
@@ -339,4 +474,78 @@ test("extractJSON finds the value, bare, fenced or inside prose; check validates
 test("safeName keeps a plain name", () => {
   assert.equal(safeName("../../etc/passwd", "f"), "passwd");
   assert.equal(safeName(".env", "f"), "env");
+});
+
+test("a preset's repositories and gosidian's MCP: the node's settings", () => {
+  const p = preset("http://api.test", `repos:
+  - {name: app, url: "https://git.example.com/team/app.git", branch_prefix: bots/}
+  - {name: docs, url: /srv/docs.git}
+mcp: [read, write]`);
+  assert.deepEqual(p.repos.map((r) => [r.name, r.base, r.branch_prefix]), [["app", "main", "bots/"], ["docs", "main", "agent/"]]);
+  assert.deepEqual(p.mcp, ["read", "write"]);
+  const s: any = runSchema(p);
+  assert.deepEqual(s.properties.repo.properties.name.enum, ["app", "docs"]);
+  assert.deepEqual(s.properties.repo.required, ["name"]);
+  assert.deepEqual(s.properties.mcp, { enum: ["none", "read", "write"], default: "none", description: s.properties.mcp.description });
+  assert.deepEqual(settingsOf(p, { prompt: "x", repo: { name: "docs", pr: { title: "t" } }, mcp: "write" }).repo, { name: "docs", push: true, pr: { title: "t" } });
+  assert.equal(settingsOf(p, { prompt: "x" }).mcp, "none");
+  assert.equal(settingsOf(p, { prompt: "x" }).repo, undefined);
+  assert.throws(() => settingsOf(p, { prompt: "x", repo: { name: "app", force: true } }), /additional properties/);
+  assert.throws(() => settingsOf(p, { prompt: "x", repo: {} }), /required property 'name'/);
+  const ro: any = runSchema(preset("http://api.test", "mcp: [read]"));
+  assert.deepEqual(ro.properties.mcp.enum, ["none", "read"]);
+  assert.equal(ro.properties.repo, undefined);
+  assert.deepEqual(preset("http://api.test").mcp, []);
+  assert.deepEqual(preset("http://api.test").repos, []);
+});
+
+test("gosidian's MCP: the call's _meta, the server and its rule in Claude Code's arguments, the token in its environment", () => {
+  const meta = { "gosidian/mcp_url": "http://gosidian:8080/mcp", "gosidian/mcp_token": "tok-123" };
+  assert.equal(mcpOf(undefined, meta), undefined);
+  assert.equal(mcpOf("none", meta), undefined);
+  assert.deepEqual(mcpOf("write", meta), { level: "write", url: "http://gosidian:8080/mcp", token: "tok-123" });
+  assert.throws(() => mcpOf("read", {}), /with\.mcp read: the call carries no gosidian\/mcp_url and gosidian\/mcp_token in its _meta: gosidian is too old for it, or the manifest is not accepted with its permissions\.mcp/);
+  assert.throws(() => mcpOf("read", { ...meta, "gosidian/mcp_token": "" }), /carries no/);
+  assert.throws(() => mcpOf("read", { ...meta, "gosidian/mcp_url": "http://x/${HOME}" }), /not an http\(s\) address/);
+  assert.throws(() => mcpOf("read", { ...meta, "gosidian/mcp_token": "tok\n123" }), /not a token/);
+  assert.equal(mcpConfig(), '{"mcpServers":{}}');
+  const p = preset("http://api.test", "mcp: [read]");
+  const args = buildArgs(settingsOf(p, { prompt: "x", tools: [] }), targetOf(p, "sonnet"), "/s", { url: meta["gosidian/mcp_url"] });
+  assert.equal(args[args.indexOf("--tools") + 1], "", "no built-in tool");
+  assert.equal(args[args.indexOf("--allowedTools") + 1], "mcp__gosidian__*", "every tool of gosidian's server");
+  assert.ok(args.includes("--strict-mcp-config") && args.includes("--restricted"));
+  assert.deepEqual(JSON.parse(args[args.indexOf("--mcp-config") + 1]), { mcpServers: { gosidian: { type: "http", url: "http://gosidian:8080/mcp", headers: { Authorization: "Bearer ${GOSIDIAN_MCP_TOKEN}" } } } });
+  assert.ok(!args.join(" ").includes("tok-123"));
+  const e = buildEnv("/h", "http://127.0.0.1:1", "sk-step", undefined, "tok-123");
+  assert.equal(e.GOSIDIAN_MCP_TOKEN, "tok-123");
+  assert.equal(buildEnv("/h", "http://127.0.0.1:1", "sk-step").GOSIDIAN_MCP_TOKEN, undefined);
+});
+
+test("a step's repository: the system prompt, the commit message, the steps' log", () => {
+  const p = preset("http://api.test", "repos: [{name: app, url: /srv/app.git}]");
+  const repo = { name: "app", branch: "agent/r-1-0a1b", base: "main" };
+  const edit = systemPrompt(p, settingsOf(p, { prompt: "x", tools: ["Read", "Write"], repo: { name: "app" } }), [], repo);
+  assert.match(edit, /## Workspace\n.*\nWrite the files you produce in the folder out\/: they are handed back with your answer\. Change nothing elsewhere, but in repo\/\.\n\n## Repository\nThe repository app is checked out in the folder repo\/ of your working directory, on the branch agent\/r-1-0a1b, from main\. The folders in\/ and out\/ are not part of it: they are as above\.\nMake your changes to its files there\. Do not commit, push or change branches: when the task ends, the plugin commits what you changed\.\n\nRispondi/);
+  assert.doesNotMatch(edit, /git log/, "no Bash, no git");
+  const bash = systemPrompt(p, { ...settingsOf(p, { prompt: "x" }), tools: ["Read", "Bash"] }, [], repo);
+  assert.match(bash, /git log, git diff and git status work in repo\/; its git folder is read-only\./);
+  assert.match(systemPrompt(p, settingsOf(p, { prompt: "x", access: "read" }), [], repo), /Read its files there: you cannot change them in this task\./);
+  assert.doesNotMatch(systemPrompt(p, settingsOf(p, { prompt: "x" }), []), /Repository|repo\//);
+
+  const meta = { "gosidian/project": "rag", "gosidian/run": "r-1" };
+  const long = "Fix the parser of the dates in every module of the application, and add its tests";
+  const msg = commitMessage(p, `\n  ${long}\nThen run them.`, "Done: 3 files.\n", meta).split("\n");
+  assert.equal(msg[0], `claude-test: ${long.slice(0, 71)}…`);
+  assert.equal(msg[0].length, "claude-test: ".length + 72);
+  assert.deepEqual(msg.slice(1), ["", "Done: 3 files.", "", "gosidian: project rag, run r-1", ""]);
+  const big = commitMessage(p, "Short", "x".repeat(5000), undefined).split("\n");
+  assert.equal(big[0], "claude-test: Short");
+  assert.equal(big[2], "x".repeat(4000));
+  assert.deepEqual(big.slice(3), ["[…]", "", "gosidian: project -, run -", ""]);
+  assert.deepEqual(commitMessage(p, "Short", "", meta).split("\n"), ["claude-test: Short", "", "gosidian: project rag, run r-1", ""]);
+
+  const st = stepOf({ model: { id: "m" }, usage: {}, repo: { name: "app", branch: "agent/r-1-0a1b", commit: "c0ffee", changed: 1 } }, meta, 0, 1000);
+  assert.deepEqual(st.repo, { name: "app", branch: "agent/r-1-0a1b", commit: "c0ffee" });
+  assert.deepEqual(stepOf({ repo: { name: "app", branch: "agent/x" } }, undefined, 0, 1).repo, { name: "app", branch: "agent/x" }, "nothing changed: no commit");
+  assert.equal(stepOf({}, undefined, 0, 1).repo, undefined);
 });

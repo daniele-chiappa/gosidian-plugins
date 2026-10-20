@@ -1,25 +1,43 @@
-// The proxy between Claude Code and the API: the step's key for the
-// credential, the betas, the connection check, the paths it forwards, the
-// budget, the usage and the effort it notes, and the token kept out of
-// every log and answer.
+// The proxy between Claude Code and the endpoints: the step's key for the
+// endpoint's credential, the betas, the connection check, the paths it
+// forwards, the budget, the usage and the effort it notes, the token kept
+// out of every log and answer; and for a compatible endpoint its key as a
+// bearer, its headers, the step's model in every message, the token count
+// and the list of models answered by the proxy.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { AnthropicProxy, MessageUsage, mergeBeta } from "../src/proxy.ts";
+import { AnthropicProxy, MessageUsage, mergeBeta, upstreamsOf, type Tokens } from "../src/proxy.ts";
+import type { Auth } from "../src/preset.ts";
 import { mockAPI, USAGE } from "./mock-api.ts";
-import { TOKEN } from "./helpers.ts";
+import { keysOf, LOCAL_KEY, TOKEN, twoEndpoints } from "./helpers.ts";
 
 const total = USAGE.input_tokens + USAGE.cache_read_input_tokens + USAGE.cache_creation_input_tokens + USAGE.output_tokens;
 
-async function setup(kind: "oauth" | "api_key" = "oauth") {
-  const api = await mockAPI();
+async function setup(auth: Auth = "oauth", o: { model?: string; noEffort?: boolean; prefix?: string; headers?: Record<string, string> } = {}) {
+  const api = await mockAPI({ prefix: o.prefix });
   const logs: string[] = [];
   const headers: Headers[] = [];
-  const proxy = new AnthropicProxy({ baseUrl: api.url, kind, credential: TOKEN }, { log: (m, f) => logs.push(JSON.stringify({ m, ...f })), onHeaders: (h) => headers.push(h) });
+  const credential = auth === "none" ? "" : auth === "bearer" ? LOCAL_KEY : TOKEN;
+  const proxy = new AnthropicProxy(
+    [{ name: "ep", url: api.url + (o.prefix ?? ""), auth, credential, headers: o.headers, models: [{ name: "qwen", id: "qwen/qwen3-coder" }, { name: "free", id: "llama:8b" }] }],
+    { log: (m, f) => logs.push(JSON.stringify({ m, ...f })), onHeaders: (h) => headers.push(h) },
+  );
   await proxy.listen();
   let used = 0;
   let left = 10_000;
   const seen: [string, string | null][] = [];
-  const g = proxy.grant({ left: () => left - used, usage: (n) => (used += n), seen: (m, e) => seen.push([m, e]) });
+  const tokens: Tokens[] = [];
+  const g = proxy.grant({
+    endpoint: "ep",
+    ...(o.model ? { model: o.model } : {}),
+    ...(o.noEffort ? { noEffort: true } : {}),
+    left: () => left - used,
+    usage: (n, t) => {
+      used += n;
+      tokens.push(t);
+    },
+    seen: (m, e) => seen.push([m, e]),
+  });
   const call = (path: string, init: RequestInit & { key?: string } = {}) =>
     fetch(proxy.url + path, {
       method: init.method ?? "POST",
@@ -27,7 +45,7 @@ async function setup(kind: "oauth" | "api_key" = "oauth") {
       body: init.body,
     });
   return {
-    api, proxy, g, logs, headers, seen, call,
+    api, proxy, g, logs, headers, seen, tokens, call,
     used: () => used,
     setLeft: (n: number) => (left = n),
     close: async () => {
@@ -64,6 +82,7 @@ test("a subscription: the step's key becomes the token, the betas gain OAuth's, 
     assert.equal(up.headers.host, new URL(t.api.url).host);
     assert.deepEqual(up.body.output_config, { effort: "high" }, "the body goes on as it is");
     assert.equal(t.used(), total, "the usage of the stream is counted");
+    assert.deepEqual(t.tokens[0], { input: 100, output: 5, cache_read: 1000, cache_write: 50 }, "and its kinds");
     assert.deepEqual(t.seen, [["claude-sonnet-5-5", "high"]]);
     assert.equal(t.headers.length, 1, "the rate-limit headers are handed on");
     assert.equal(t.logs.filter((l) => l.includes("rate-limit headers")).length, 1);
@@ -141,7 +160,7 @@ test("only messages and models are forwarded; a spent budget refuses a message",
 test("call: the plugin's own requests carry the credential", async () => {
   const t = await setup();
   try {
-    const r = await t.proxy.call("GET", "/api/oauth/usage");
+    const r = await t.proxy.call("ep", "GET", "/api/oauth/usage");
     assert.equal(r.status, 403);
     await r.text();
     const up = t.api.requests[0];
@@ -167,9 +186,9 @@ test("the token is in no log and no answer", async () => {
     }
     await t.proxy.close();
     // A request to a closed upstream fails: its error is logged too.
-    const dead = new AnthropicProxy({ baseUrl: "http://127.0.0.1:1", kind: "oauth", credential: TOKEN }, { log: (m, f) => t.logs.push(JSON.stringify({ m, ...f })) });
+    const dead = new AnthropicProxy([{ name: "ep", url: "http://127.0.0.1:1", auth: "oauth", credential: TOKEN }], { log: (m, f) => t.logs.push(JSON.stringify({ m, ...f })) });
     await dead.listen();
-    const g = dead.grant({ left: () => 1, usage: () => {} });
+    const g = dead.grant({ endpoint: "ep", left: () => 1, usage: () => {} });
     const r = await fetch(dead.url + "/v1/messages", { method: "POST", headers: { "x-api-key": g.key }, body: "{}" });
     assert.equal(r.status, 502);
     seen.push(await r.text());
@@ -190,4 +209,98 @@ test("MessageUsage adds message_start's and message_delta's usage of a stream", 
   const j = new MessageUsage("application/json");
   j.push(enc.encode(JSON.stringify({ usage: { input_tokens: 5, output_tokens: 6 } })));
   assert.equal(j.total(), 11);
+});
+
+test("a bearer endpoint: its key as a bearer, its headers, no OAuth beta, the step's model in every message", async () => {
+  const t = await setup("bearer", { model: "qwen/qwen3-coder", prefix: "/api", headers: { "HTTP-Referer": "https://gosidian.test", "X-Title": "gosidian" } });
+  try {
+    const r = await t.call("/v1/messages?beta=true", {
+      headers: { "anthropic-beta": "claude-code-20250219" },
+      body: JSON.stringify({ model: "qwen", stream: true, messages: [] }),
+    });
+    assert.equal(r.status, 200);
+    await r.text();
+    await (await t.call("/v1/messages", { body: JSON.stringify({ model: "claude-haiku-5-5", max_tokens: 5, messages: [] }) })).text();
+    const up = t.api.requests.filter((x) => x.path === "/api/v1/messages");
+    assert.equal(up.length, 2, "under the endpoint's path");
+    for (const u of up) {
+      assert.equal(u.headers.authorization, `Bearer ${LOCAL_KEY}`);
+      assert.equal(u.headers["x-api-key"], undefined, "neither the step's key nor another");
+      assert.ok(!String(u.headers["anthropic-beta"] ?? "").includes("oauth-2025-04-20"), "no OAuth beta");
+      assert.equal(u.headers["x-title"], "gosidian");
+      assert.equal(u.headers["http-referer"], "https://gosidian.test");
+      assert.equal(u.body.model, "qwen/qwen3-coder", "the step's model, whatever Claude Code named");
+    }
+    assert.equal(up[0].headers["anthropic-beta"], "claude-code-20250219", "Claude Code's betas go on as they are");
+    assert.deepEqual(t.seen.map((x) => x[0]), ["qwen", "claude-haiku-5-5"], "the models Claude Code asked for");
+    assert.equal(t.used(), 2 * total, "the usage is counted as on Anthropic's");
+    assert.equal(t.headers.length, 0, "a subscription's headers come only from its endpoint");
+    assert.ok(!t.logs.some((l) => l.includes("rate-limit headers")));
+  } finally {
+    await t.close();
+  }
+});
+
+test("a model without effort: the proxy drops the effort of its requests, and keeps the rest", async () => {
+  const t = await setup("bearer", { model: "qwen/qwen3-coder", noEffort: true });
+  try {
+    await (await t.call("/v1/messages", { body: JSON.stringify({ model: "qwen", output_config: { effort: "high" }, thinking: { type: "adaptive" }, messages: [] }) })).text();
+    await (await t.call("/v1/messages", { body: JSON.stringify({ model: "qwen", output_config: { effort: "high", format: { type: "json_schema" } }, messages: [] }) })).text();
+    const [a, b] = t.api.requests.map((r) => r.body);
+    assert.equal(a.output_config, undefined);
+    assert.deepEqual(a.thinking, { type: "adaptive" });
+    assert.deepEqual(b.output_config, { format: { type: "json_schema" } });
+    assert.deepEqual(t.seen, [["qwen", null], ["qwen", null]], "the effort the endpoint got: none");
+  } finally {
+    await t.close();
+  }
+});
+
+test("an endpoint without auth gets no credential at all", async () => {
+  const t = await setup("none", { model: "llama:8b" });
+  try {
+    await (await t.call("/v1/messages", { body: JSON.stringify({ model: "free", messages: [] }) })).text();
+    const up = t.api.requests[0];
+    assert.equal(up.headers.authorization, undefined);
+    assert.equal(up.headers["x-api-key"], undefined);
+    assert.equal(up.body.model, "llama:8b");
+  } finally {
+    await t.close();
+  }
+});
+
+test("a compatible endpoint: the proxy answers the token count (404) and the models itself", async () => {
+  const t = await setup("bearer", { model: "qwen/qwen3-coder" });
+  try {
+    const count = await t.call("/v1/messages/count_tokens", { body: JSON.stringify({ model: "qwen", messages: [] }) });
+    assert.equal(count.status, 404);
+    assert.match((await count.json()).error.message, /counts no tokens/);
+    const list = await (await t.call("/v1/models?limit=100", { method: "GET" })).json();
+    assert.deepEqual(list.data.map((m: any) => [m.type, m.id, m.display_name]), [["model", "qwen", "qwen/qwen3-coder"], ["model", "free", "llama:8b"]]);
+    assert.equal(list.has_more, false);
+    const one = await t.call("/v1/models/free", { method: "GET" });
+    assert.equal((await one.json()).display_name, "llama:8b");
+    const none = await t.call("/v1/models/opus", { method: "GET" });
+    assert.equal(none.status, 404);
+    await none.text();
+    assert.equal(t.api.requests.length, 0, "nothing reaches the endpoint");
+    const refused = await t.call("/v1/files", { method: "GET" });
+    assert.equal(refused.status, 404, "the other paths are refused as on Anthropic's");
+    await refused.text();
+  } finally {
+    await t.close();
+  }
+});
+
+test("upstreamsOf: the preset's endpoints with their keys and models; a grant names a known endpoint", async () => {
+  const p = twoEndpoints("http://a.test", "http://b.test");
+  const ups = upstreamsOf(p, keysOf(p));
+  assert.deepEqual(ups.map((u) => [u.name, u.url, u.auth, u.credential === TOKEN ? "token" : u.credential === LOCAL_KEY ? "local" : u.credential]), [
+    ["anthropic", "http://a.test", "oauth", "token"],
+    ["local", "http://b.test/api", "bearer", "local"],
+  ]);
+  assert.deepEqual(ups[1].models, [{ name: "qwen", id: "qwen/qwen3-coder" }, { name: "free", id: "llama:8b" }]);
+  assert.deepEqual(ups[1].headers, { "HTTP-Referer": "https://gosidian.test", "X-Title": "gosidian" });
+  const proxy = new AnthropicProxy(ups);
+  assert.throws(() => proxy.grant({ endpoint: "nope", left: () => 1, usage: () => {} }), /no endpoint nope/);
 });

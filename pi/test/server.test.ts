@@ -40,10 +40,14 @@ test("gosidian's view: bearer, manifest, run with the tokens left, files as reso
     assert.equal(man.nodes[0].file_refs, true);
     assert.deepEqual(man.permissions.network, ["gosidian", "127.0.0.1:" + new URL(llm.url).port]);
     assert.deepEqual(man.nodes[0].input_schema.properties.model.enum, ["a", "b"]);
+    assert.equal(man.nodes[0].contract, "agent-run/1");
+    assert.equal(man.nodes[0].mcp, undefined);
 
-    const res: any = await client.callTool({ name: "run", arguments: { prompt: "scrivi", tools: ["write"] }, _meta: { "gosidian/llm_tokens_left": 5000 } });
+    const res: any = await client.callTool({ name: "run", arguments: { prompt: "scrivi", access: "edit", tools: ["write"] }, _meta: { "gosidian/llm_tokens_left": 5000, "gosidian/project": "demo", "gosidian/run": "r1" } });
     assert.ok(!res.isError, JSON.stringify(res.content));
     assert.equal(res.structuredContent.text, "ok ![](fig 1.md)");
+    assert.equal(res.structuredContent.model.name, "a");
+    assert.equal(res.structuredContent.executor.plugin, "gosidian-pi");
     assert.equal(res.structuredContent.usage.total_tokens, 228);
     assert.equal(llm.requests[0].max_completion_tokens, 800);
     const resource = res.content.find((c: any) => c.type === "resource");

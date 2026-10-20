@@ -1,7 +1,7 @@
 // The plugin as gosidian sees it: the bearer, the manifest (nodes for the
 // pipelines, tools with their access for the agents), run with the tokens
 // left in its _meta and a file given back as a resource, version, update
-// and usage.
+// and usage; a preset with repositories and gosidian's MCP.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,8 +10,9 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { mockAPI } from "./mock-api.ts";
-import { fake, FakeInstaller, FakeRegistry, preset, TOKEN } from "./helpers.ts";
-import { start } from "../src/server.ts";
+import { bareRepo, fake, FakeInstaller, FakeRegistry, git, mcpEndpoint, preset, TOKEN } from "./helpers.ts";
+import { parsePreset } from "../src/preset.ts";
+import { manifest, start } from "../src/server.ts";
 
 test("gosidian's view: bearer, manifest, run, version, update, usage", async () => {
   const api = await mockAPI();
@@ -21,7 +22,7 @@ test("gosidian's view: bearer, manifest, run, version, update, usage", async () 
   const registry = new FakeRegistry({ latest: "1.0.0" });
   const app = await start({
     preset: preset(api.url),
-    credential: TOKEN,
+    credentials: { anthropic: TOKEN },
     token: "t0k",
     port: 0,
     workers: 1,
@@ -48,6 +49,13 @@ test("gosidian's view: bearer, manifest, run, version, update, usage", async () 
     assert.equal(man.gosidian, 1);
     assert.deepEqual(man.nodes.map((n: any) => [n.name, n.tool]), [["run", "run"], ["version", "version"], ["update", "update"], ["usage", "usage"]]);
     assert.deepEqual(man.tools.map((n: any) => [n.name, n.access]), [["run", "write"], ["version", "read"], ["update", "write"], ["usage", "read"]]);
+    assert.equal(man.nodes[0].contract, "agent-run/1");
+    assert.equal(man.nodes[1].contract, undefined);
+    assert.equal(man.nodes[0].mcp, undefined, "no MCP in the preset");
+    for (const k of ["repo", "mcp"]) {
+      assert.equal(man.nodes[0].input_schema.properties[k], undefined, k);
+      assert.equal(man.nodes[0].output_schema.properties[k], undefined, k);
+    }
     assert.deepEqual(man.nodes[0].files, ["files"]);
     assert.equal(man.nodes[0].file_refs, true);
     assert.equal(man.nodes[1].files, undefined);
@@ -60,7 +68,7 @@ test("gosidian's view: bearer, manifest, run, version, update, usage", async () 
     assert.ok(!res.isError, JSON.stringify(res.content));
     assert.equal(res.structuredContent.text, "ok ![](fig 1.md)");
     assert.equal(res.structuredContent.usage.total_tokens, 1155);
-    assert.equal(res.structuredContent.model, "claude-sonnet-4-5-20251001");
+    assert.deepEqual(res.structuredContent.model, { name: "sonnet", id: "claude-sonnet-4-5-20251001", endpoint: "anthropic" });
     const resource = res.content.find((c: any) => c.type === "resource");
     assert.equal(decodeURIComponent(new URL(resource.resource.uri).pathname), "/fig 1.md");
     assert.equal(Buffer.from(resource.resource.blob, "base64").toString(), "x");
@@ -111,6 +119,7 @@ test("gosidian's view: bearer, manifest, run, version, update, usage", async () 
     assert.equal(usage.steps[2].project, "rag");
     assert.equal(usage.steps[2].run, "r-1");
     assert.equal(usage.steps[2].claude_code, "1.0.0");
+    assert.equal(usage.steps[2].endpoint, "anthropic");
     const one: any = (await client.callTool({ name: "usage", arguments: { steps: 1 } })).structuredContent;
     assert.equal(one.steps.length, 1);
     const since: any = (await client.callTool({ name: "usage", arguments: { since: usage.steps[1].at } })).structuredContent;
@@ -122,6 +131,125 @@ test("gosidian's view: bearer, manifest, run, version, update, usage", async () 
   } finally {
     await app.close();
     await api.close();
+    fs.rmSync(runsDir, { recursive: true, force: true });
+    fs.rmSync(versionsDir, { recursive: true, force: true });
+  }
+});
+
+test("a preset without Anthropic's endpoints: its hosts, no probe, no subscription, the steps on its models", async () => {
+  const local = await mockAPI();
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-srv-"));
+  const versionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-srv-v-"));
+  const p = parsePreset(`
+name: claude-local
+endpoints:
+  ollama: {url: ${local.url}, auth: none}
+  vllm: {url: "http://vllm.lan:8000", auth: bearer, key_env: VLLM_KEY}
+models:
+  - {name: qwen3-coder, endpoint: ollama, id: "qwen3-coder:30b", context: 65536}
+  - {name: glm, endpoint: vllm, id: glm-4.6}
+tools: {allowed: [Read, Grep, Glob, Write]}
+`);
+  const app = await start({
+    preset: p,
+    credentials: { ollama: "", vllm: "vllm-key" },
+    token: "",
+    port: 0,
+    workers: 1,
+    versionsDir,
+    installer: new FakeInstaller(),
+    registry: new FakeRegistry({ latest: "2.0.0" }),
+    env: { runsDir, maxFilesBytes: 1 << 20, maxOutFiles: 5, maxOutBytes: 1 << 20, log: () => {} },
+  });
+  const url = `http://127.0.0.1:${(app.server.address() as any).port}`;
+  try {
+    await app.versions.ensure();
+    await app.versions.probing;
+    const client = new Client({ name: "gosidian-test", version: "0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url + "/mcp")));
+    const man: any = (await client.callTool({ name: "gosidian_manifest", arguments: {} })).structuredContent;
+    assert.deepEqual(man.permissions.network, ["gosidian", new URL(local.url).host, "vllm.lan:8000", "registry.npmjs.org"]);
+    assert.deepEqual(man.nodes[0].input_schema.properties.model.enum, ["qwen3-coder", "glm"]);
+    const ver: any = (await client.callTool({ name: "version", arguments: {} })).structuredContent;
+    assert.equal(ver.installed, "2.0.0");
+    assert.deepEqual(ver.aliases, {});
+    assert.match(ver.probe_skipped, /no Anthropic endpoint/);
+    assert.deepEqual(ver.models, []);
+    assert.equal(local.requests.length, 0, "no probe, no list of models");
+    const run: any = (await client.callTool({ name: "run", arguments: { prompt: fake({}) } })).structuredContent;
+    assert.deepEqual(run.model, { name: "qwen3-coder", id: "qwen3-coder:30b", endpoint: "ollama" });
+    assert.equal(run.cost_source, "none");
+    assert.equal(run.subscription, undefined);
+    assert.equal(local.requests[0].body.model, "qwen3-coder:30b");
+    assert.equal(local.requests[0].headers.authorization, undefined);
+    const usage: any = (await client.callTool({ name: "usage", arguments: {} })).structuredContent;
+    assert.equal(usage.applicable, false);
+    assert.match(usage.reason, /no endpoint of the preset is a subscription/);
+    assert.deepEqual([usage.steps[0].model, usage.steps[0].endpoint], ["qwen3-coder:30b", "ollama"]);
+    await client.close();
+  } finally {
+    await app.close();
+    await local.close();
+    fs.rmSync(runsDir, { recursive: true, force: true });
+    fs.rmSync(versionsDir, { recursive: true, force: true });
+  }
+});
+
+test("repositories and gosidian's MCP: the manifest, a run with both, its steps' log", async () => {
+  const api = await mockAPI();
+  const bare = bareRepo();
+  const token = "gsd_mcp_SERVER-TEST-TOKEN";
+  const mcp = await mcpEndpoint(token);
+  const runsDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-srv-"));
+  const versionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-srv-v-"));
+  const p = preset(api.url, `repos:
+  - {name: app, url: "${bare}"}
+  - {name: web, url: "git@git.example.com:team/web.git", key_file: /run/secrets/web-key, known_hosts: "git.example.com ssh-ed25519 AAAA", pr: {kind: gitea, api: "https://gitea.example.com/api/v1", repo: team/web, token_file: /run/secrets/gitea}}
+mcp: [read]`);
+  const man: any = manifest(p);
+  assert.equal(man.nodes[0].mcp, true);
+  assert.equal(man.tools[0].mcp, undefined, "a tool of the agents takes no MCP of its own");
+  assert.deepEqual(man.permissions, { files: true, network: ["gosidian", new URL(api.url).host, "git.example.com", "gitea.example.com", "registry.npmjs.org"], mcp: ["read"] });
+  assert.deepEqual(man.nodes[0].input_schema.properties.mcp.enum, ["none", "read"]);
+  assert.deepEqual(man.nodes[0].input_schema.properties.repo.properties.name.enum, ["app", "web"]);
+  assert.ok(man.nodes[0].output_schema.properties.repo && man.nodes[0].output_schema.properties.mcp);
+  const app = await start({
+    preset: p,
+    credentials: { anthropic: TOKEN },
+    token: "",
+    port: 0,
+    workers: 1,
+    versionsDir,
+    installer: new FakeInstaller(),
+    registry: new FakeRegistry({ latest: "2.0.0" }),
+    env: { runsDir, maxFilesBytes: 1 << 20, maxOutFiles: 5, maxOutBytes: 1 << 20, log: () => {} },
+  });
+  const url = `http://127.0.0.1:${(app.server.address() as any).port}`;
+  try {
+    await app.versions.ensure();
+    await app.versions.probing;
+    const client = new Client({ name: "gosidian-test", version: "0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url + "/mcp")));
+    const meta = { "gosidian/project": "rag", "gosidian/run": "r-9", "gosidian/mcp_url": mcp.url, "gosidian/mcp_token": token };
+    const res: any = await client.callTool({ name: "run", arguments: { prompt: fake({ edit: { "repo/c.txt": "c\n" }, text: "Added c." }), tools: ["Write"], repo: { name: "app" }, mcp: "read" }, _meta: meta });
+    assert.ok(!res.isError, JSON.stringify(res.content));
+    const o = res.structuredContent;
+    assert.deepEqual(o.mcp, { level: "read", url: mcp.url, status: "connected" });
+    assert.match(o.repo.branch, /^agent\/r-9-[0-9a-f]{16}$/);
+    assert.equal(git(bare, "rev-parse", o.repo.branch).trim(), o.repo.commit);
+    assert.ok(!JSON.stringify(res).includes(token), "the token is not in the answer");
+    const bad: any = await client.callTool({ name: "run", arguments: { prompt: fake({}), mcp: "read" }, _meta: { "gosidian/run": "r-10" } });
+    assert.ok(bad.isError);
+    assert.match(bad.content[0].text, /^with\.mcp read: the call carries no gosidian\/mcp_url/);
+    const failed: any = await client.callTool({ name: "run", arguments: { prompt: fake({}), repo: { name: "app", branch: "main" } } });
+    assert.match(failed.content[0].text, /branch main: a step commits under agent\//);
+    const usage: any = (await client.callTool({ name: "usage", arguments: {} })).structuredContent;
+    assert.deepEqual(usage.steps.map((s: any) => s.repo ?? null), [{ name: "app" }, null, { name: "app", branch: o.repo.branch, commit: o.repo.commit }]);
+    await client.close();
+  } finally {
+    await app.close();
+    await api.close();
+    await mcp.close();
     fs.rmSync(runsDir, { recursive: true, force: true });
     fs.rmSync(versionsDir, { recursive: true, force: true });
   }

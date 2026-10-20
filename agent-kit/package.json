@@ -1,0 +1,19 @@
+{
+  "name": "gosidian-agent-kit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "The code the agent plugins share: the agent-run/1 contract, the repositories of a step",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 \"test/*.test.ts\"",
+    "check": "tsc --noEmit -p ."
+  },
+  "devDependencies": {
+    "@types/node": "24.19.1",
+    "typescript": "7.0.2"
+  }
+}

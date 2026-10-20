@@ -21,8 +21,10 @@ tools:
   allowed: [Read, Grep, Glob, Write, Edit]
   default: [Read, Grep, Glob]
 limits:
-  default: {max_turns: 20, max_seconds: 10m, max_budget_usd: 1}
-  max: {max_turns: 60, max_seconds: 14m, max_budget_usd: 5}
+  # max_cost: dollars at the API's list prices, Claude Code's own count;
+  # with a subscription they measure the work, they are not billed.
+  default: {max_turns: 20, max_seconds: 10m, max_tokens: 300000, max_cost: 1}
+  max: {max_turns: 60, max_seconds: 14m, max_tokens: 2000000, max_cost: 5}
   # The pipelines leave this much of the session (5 hours) and of the week
   # to the subscriber's own sessions.
   min_left_percent: {session: 20, week: 10}

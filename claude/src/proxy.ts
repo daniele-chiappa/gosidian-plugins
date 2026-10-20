@@ -1,38 +1,79 @@
 // The API Claude Code talks to: a proxy on 127.0.0.1 (ANTHROPIC_BASE_URL)
-// that forwards a step's requests to the preset's upstream. Claude Code
+// that forwards a step's requests to the endpoint of its model. Claude Code
 // holds only a key of its step (ANTHROPIC_API_KEY, sent as x-api-key), so
-// the subscription's token, or the API key, never enters its process
-// (whose tools can read files and /proc). The proxy puts the credential in
-// place of the step's key, keeps a step within its token budget, counts
-// its usage, notes the effort and the model of each request, and hands the
-// subscription's rate-limit headers to whoever keeps them. It logs methods,
-// paths and statuses, never a header.
+// the subscription's token, or an endpoint's key, never enters its process
+// (whose tools can read files and /proc). The proxy puts the endpoint's
+// credential in place of the step's key, keeps a step within its token
+// budget, counts its usage, notes the effort and the model of each request,
+// and hands the subscription's rate-limit headers to whoever keeps them. An
+// endpoint other than Anthropic's gets the step's model in every message,
+// and the proxy answers the token count and the list of models itself; a
+// model without effort gets none. It logs methods, paths and statuses,
+// never a header.
 import http from "node:http";
 import crypto from "node:crypto";
 import type { AddressInfo } from "node:net";
 import { rateLimitHeaderNames } from "./subscription.ts";
+import { isAnthropic, type Auth, type Preset } from "./preset.ts";
 
 export interface Upstream {
-  baseUrl: string;
-  kind: "oauth" | "api_key";
+  // name is the preset's name of the endpoint.
+  name: string;
+  url: string;
+  auth: Auth;
+  // credential is the endpoint's key; "" with auth none.
   credential: string;
+  headers?: Record<string, string>;
+  // models are the preset's models on the endpoint: the proxy lists them
+  // for an endpoint other than Anthropic's.
+  models?: { name: string; id: string }[];
+}
+
+// upstreamsOf are the preset's endpoints with their keys, by name.
+export function upstreamsOf(p: Preset, keys: Record<string, string>): Upstream[] {
+  return Object.values(p.endpoints).map((e) => ({
+    name: e.name,
+    url: e.url,
+    auth: e.auth,
+    credential: keys[e.name] ?? "",
+    headers: e.headers,
+    models: p.models.filter((m) => m.endpoint === e.name).map((m) => ({ name: m.name, id: m.id })),
+  }));
 }
 
 // OAUTH_BETA is the beta the API asks of a request with a subscription's
 // token.
 export const OAUTH_BETA = "oauth-2025-04-20";
 
+// Tokens are the usage of an answer, by kind.
+export interface Tokens {
+  input: number;
+  output: number;
+  cache_read: number;
+  cache_write: number;
+}
+
 export interface Grant {
+  // endpoint is the name of the step's endpoint.
+  endpoint: string;
+  // model is the step's model as a compatible endpoint knows it: every
+  // message goes to it, whatever model Claude Code names (a background
+  // task's, say).
+  model?: string;
+  // noEffort: the model takes no effort level, and Claude Code sends one
+  // all the same (2.1.304, to a model it does not know): the proxy drops it.
+  noEffort?: boolean;
   // left is the tokens the step may still use.
   left(): number;
-  usage(total: number): void;
+  usage(total: number, tokens: Tokens): void;
   // seen notes a message request: its model and its effort (null: none).
   seen?(model: string, effort: string | null): void;
 }
 
 export interface ProxyOptions {
   log?: (msg: string, fields?: Record<string, unknown>) => void;
-  // onHeaders gets the headers of every answer of the upstream.
+  // onHeaders gets the headers of every answer of a subscription's
+  // endpoint (auth oauth).
   onHeaders?: (h: Headers) => void;
 }
 
@@ -64,12 +105,12 @@ export class AnthropicProxy {
   url = "";
   private server: http.Server;
   private grants = new Map<string, Grant>();
-  private upstream: Upstream;
+  private upstreams = new Map<string, Upstream>();
   private opts: ProxyOptions;
   private namesLogged = false;
 
-  constructor(upstream: Upstream, opts: ProxyOptions = {}) {
-    this.upstream = upstream;
+  constructor(upstreams: Upstream[], opts: ProxyOptions = {}) {
+    for (const u of upstreams) this.upstreams.set(u.name, { ...u, url: u.url.replace(/\/+$/, "") });
     this.opts = opts;
     this.server = http.createServer((req, res) => {
       this.handle(req, res).catch((e) => {
@@ -94,32 +135,48 @@ export class AnthropicProxy {
     return new Promise((ok) => this.server.close(() => ok()));
   }
 
+  private upstream(name: string): Upstream {
+    const u = this.upstreams.get(name);
+    if (!u) throw new Error(`the proxy has no endpoint ${name}`);
+    return u;
+  }
+
   // grant opens the proxy to one step: its key, and how to revoke it.
   grant(g: Grant): { key: string; revoke(): void } {
+    this.upstream(g.endpoint);
     const key = "sk-step-" + crypto.randomBytes(24).toString("base64url");
     this.grants.set(key, g);
     return { key, revoke: () => this.grants.delete(key) };
   }
 
-  // headers are the request's headers for the upstream, with the
-  // credential in place of the step's key.
-  private headers(from: http.IncomingHttpHeaders | Record<string, string>): Record<string, string> {
+  // headers are the request's headers for an endpoint: its own headers,
+  // and its credential in place of the step's key.
+  private headers(up: Upstream, from: http.IncomingHttpHeaders | Record<string, string>): Record<string, string> {
     const h: Record<string, string> = {};
     for (const [k, v] of Object.entries(from)) {
       if (v === undefined || DROP_REQUEST.has(k.toLowerCase())) continue;
       h[k.toLowerCase()] = Array.isArray(v) ? v.join(", ") : String(v);
     }
     h["accept-encoding"] = "identity";
-    if (this.upstream.kind === "oauth") {
-      h.authorization = `Bearer ${this.upstream.credential}`;
-      h["anthropic-beta"] = mergeBeta(h["anthropic-beta"], OAUTH_BETA);
-    } else {
-      h["x-api-key"] = this.upstream.credential;
+    for (const [k, v] of Object.entries(up.headers ?? {})) h[k.toLowerCase()] = v;
+    switch (up.auth) {
+      case "oauth":
+        h.authorization = `Bearer ${up.credential}`;
+        h["anthropic-beta"] = mergeBeta(h["anthropic-beta"], OAUTH_BETA);
+        break;
+      case "api_key":
+        h["x-api-key"] = up.credential;
+        break;
+      case "bearer":
+        h.authorization = `Bearer ${up.credential}`;
+        break;
     }
     return h;
   }
 
-  private noteHeaders(h: Headers): void {
+  // noteHeaders hands on the headers of a subscription's answers.
+  private noteHeaders(up: Upstream, h: Headers): void {
+    if (up.auth !== "oauth") return;
     if (!this.namesLogged) {
       const names = rateLimitHeaderNames(h);
       if (names.length) {
@@ -130,18 +187,40 @@ export class AnthropicProxy {
     this.opts.onHeaders?.(h);
   }
 
-  // call is a request of the plugin's own (the models, a ping), with the
-  // credential.
-  async call(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
-    const r = await fetch(this.upstream.baseUrl + path, {
+  // call is a request of the plugin's own to an endpoint (the models, a
+  // ping), with its credential.
+  async call(endpoint: string, method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<Response> {
+    const up = this.upstream(endpoint);
+    const r = await fetch(up.url + path, {
       method,
-      headers: this.headers({ "anthropic-version": "2023-06-01", ...(body !== undefined ? { "content-type": "application/json" } : {}) }),
+      headers: this.headers(up, { "anthropic-version": "2023-06-01", ...(body !== undefined ? { "content-type": "application/json" } : {}) }),
       body: body !== undefined ? JSON.stringify(body) : undefined,
       redirect: "error",
       signal: signal ?? AbortSignal.timeout(30_000),
     });
-    this.noteHeaders(r.headers);
+    this.noteHeaders(up, r.headers);
     return r;
+  }
+
+  // local answers what a compatible endpoint is not asked: the token count
+  // (404: Claude Code then estimates) and the list of the preset's models.
+  // false when the request goes on.
+  private local(up: Upstream, method: string, path: string, res: http.ServerResponse): boolean {
+    if (isAnthropic(up)) return false;
+    if (path === "/v1/messages/count_tokens") {
+      apiError(res, 404, "not_found_error", `the endpoint ${up.name} counts no tokens: estimate them`);
+      return true;
+    }
+    if (method !== "GET" || !path.startsWith("/v1/models")) return false;
+    const list = (up.models ?? []).map((m) => ({ type: "model", id: m.name, display_name: m.id, created_at: "1970-01-01T00:00:00Z" }));
+    if (path === "/v1/models") {
+      res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify({ data: list, has_more: false, first_id: list[0]?.id ?? null, last_id: list.at(-1)?.id ?? null }));
+      return true;
+    }
+    const one = list.find((m) => m.id === decodeURIComponent(path.slice("/v1/models/".length)));
+    if (one) res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(one));
+    else apiError(res, 404, "not_found_error", "no such model");
+    return true;
   }
 
   private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
@@ -159,7 +238,9 @@ export class AnthropicProxy {
       this.log("the proxy refused a request", { method: req.method, path });
       return apiError(res, 404, "not_found_error", `the plugin's proxy does not forward ${req.method} ${path}`);
     }
-    const raw = req.method === "POST" ? await readBody(req) : undefined;
+    const up = this.upstream(g.endpoint);
+    if (this.local(up, req.method ?? "", path, res)) return;
+    let raw = req.method === "POST" ? await readBody(req) : undefined;
     const messages = path === "/v1/messages";
     if (messages) {
       let body: any = {};
@@ -169,36 +250,49 @@ export class AnthropicProxy {
         return apiError(res, 400, "invalid_request_error", "the request is not JSON");
       }
       // 400, not 429: Claude Code retries a 429, and the budget will not come back.
-      if (g.left() <= 0) return apiError(res, 400, "invalid_request_error", "the step used its token budget (the run's max_llm_tokens)");
+      if (g.left() <= 0) return apiError(res, 400, "invalid_request_error", "the step used its token budget (its max_tokens, or the run's max_llm_tokens)");
+      const asked = String(body?.model ?? "");
+      let changed = false;
+      if (g.model && body && typeof body === "object" && body.model !== g.model) {
+        body.model = g.model;
+        changed = true;
+      }
+      const oc = body?.output_config;
+      if (g.noEffort && oc && typeof oc === "object" && "effort" in oc) {
+        delete oc.effort;
+        if (!Object.keys(oc).length) delete body.output_config;
+        changed = true;
+      }
+      if (changed) raw = Buffer.from(JSON.stringify(body));
       const effort = body?.output_config?.effort;
-      g.seen?.(String(body?.model ?? ""), typeof effort === "string" ? effort : null);
+      g.seen?.(asked, typeof effort === "string" ? effort : null);
     }
     const ac = new AbortController();
     res.on("close", () => ac.abort());
-    const up = await fetch(this.upstream.baseUrl + req.url, {
+    const upr = await fetch(up.url + req.url, {
       method: req.method,
-      headers: this.headers(req.headers),
+      headers: this.headers(up, req.headers),
       body: raw ? new Uint8Array(raw) : undefined,
       signal: ac.signal,
       redirect: "error",
     });
-    this.noteHeaders(up.headers);
+    this.noteHeaders(up, upr.headers);
     const out: Record<string, string> = {};
-    up.headers.forEach((v, k) => {
+    upr.headers.forEach((v, k) => {
       if (!DROP_RESPONSE.has(k)) out[k] = v;
     });
-    res.writeHead(up.status, out);
-    const counter = messages ? new MessageUsage(up.headers.get("content-type") ?? "") : undefined;
-    if (up.body) {
-      for await (const chunk of up.body) {
+    res.writeHead(upr.status, out);
+    const counter = messages ? new MessageUsage(upr.headers.get("content-type") ?? "") : undefined;
+    if (upr.body) {
+      for await (const chunk of upr.body) {
         counter?.push(chunk);
         res.write(chunk);
       }
     }
     res.end();
-    if (up.status >= 400) this.log("the API refused a request", { method: req.method, path, status: up.status });
+    if (upr.status >= 400) this.log("the API refused a request", { endpoint: up.name, method: req.method, path, status: upr.status });
     const total = counter?.total() ?? 0;
-    if (total > 0) g.usage(total);
+    if (total > 0) g.usage(total, counter!.tokens());
   }
 }
 
@@ -277,5 +371,10 @@ export class MessageUsage {
       }
     }
     return this.u.input + this.u.cache_read + this.u.cache_write + this.u.output;
+  }
+
+  // tokens are the usage by kind, once total has read the end.
+  tokens(): Tokens {
+    return { ...this.u };
   }
 }

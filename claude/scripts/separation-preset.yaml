@@ -5,3 +5,9 @@ upstream: http://claude-harness:9000
 models: [haiku]
 tools:
   allowed: [Read, Bash, Write]
+# A repository on the plugin's disk, made by separation-test.sh, and a deploy
+# key only root reads: a local path needs no ssh, but the agent must not
+# read the key all the same.
+repos:
+  - {name: app, url: /repos/app.git, key_file: /repos/deploy-key}
+mcp: [read]

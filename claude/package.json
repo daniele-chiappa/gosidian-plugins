@@ -1,6 +1,6 @@
 {
   "name": "gosidian-claude",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin whose node runs Claude Code headless on the files a pipeline hands it",

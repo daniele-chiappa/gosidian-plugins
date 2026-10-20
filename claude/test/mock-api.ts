@@ -1,7 +1,8 @@
 // A fake Anthropic API for the tests: messages (a stream or JSON) with the
 // subscription's rate-limit headers, the list of models, and the usage
 // endpoint (403 by default, as for a token of claude setup-token). It keeps
-// every request it gets, headers included, for the tests to check.
+// every request it gets, headers included, for the tests to check. With a
+// prefix it serves under it, as OpenRouter under /api.
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -19,6 +20,9 @@ export interface MockOptions {
   usageStatus?: number;
   usageBody?: unknown;
   messageStatus?: number;
+  // prefix is the path the API is under (/api): a request's path is kept
+  // whole.
+  prefix?: string;
 }
 
 // The usage of every answer: 100 + 1000 + 50 + 5 = 1155 tokens.
@@ -38,8 +42,9 @@ export async function mockAPI(o: MockOptions = {}, host = "127.0.0.1", port = 0)
     } catch {
       body = raw;
     }
-    const path = (req.url ?? "/").split("?")[0];
-    requests.push({ method: req.method ?? "", path, headers: req.headers, body });
+    const full = (req.url ?? "/").split("?")[0];
+    const path = o.prefix && full.startsWith(o.prefix + "/") ? full.slice(o.prefix.length) : full;
+    requests.push({ method: req.method ?? "", path: full, headers: req.headers, body });
     const limits = {
       "anthropic-ratelimit-unified-status": "allowed",
       "anthropic-ratelimit-unified-5h-status": "allowed",

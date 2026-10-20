@@ -25,7 +25,7 @@ models:
     max_output: 8192
     sampling: {temperature: 0.7, top_p: 0.8, top_k: 20, presence_penalty: 1.5}
 default_model: qwen3.8-27b
-thinking: "off"
+effort: "off"
 tools:
   allowed: [read, grep, find, ls]
 limits:

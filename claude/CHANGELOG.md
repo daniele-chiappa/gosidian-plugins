@@ -4,6 +4,92 @@ The changes of the `claude` plugin, newest first. A tag `claude/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-claude:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.2.0] — 2026-10-20
+
+The run node keeps gosidian's common contract of the agents, `agent-run/1`,
+and Claude Code runs on other endpoints than Anthropic's: OpenRouter,
+Ollama, vLLM, any that speaks the Messages API, with no gateway in
+between. A step may work on a repository of the preset, which the plugin
+clones and commits, and use gosidian's MCP. A preset of 0.1 works as it
+is; the run's output changes in two fields (below).
+
+### Added
+- **Endpoints**: a preset's `endpoints`, by name, each with its `url`, its
+  `auth` (`oauth`, `api_key`, `bearer` or `none`), its key (`key_file` or
+  `key_env`) and `headers` of its own (OpenRouter's `HTTP-Referer` and
+  `X-Title`). The proxy sends a step's requests to the endpoint of its
+  model, with that endpoint's credential; to an endpoint other than
+  Anthropic's it sends the step's model in every message (a background
+  task's too), drops the effort of a model that takes none, and answers
+  the token count (404: Claude Code estimates) and the list of models
+  itself. The manifest's `permissions.network` lists every endpoint's
+  host.
+- **Models of their own**: a model of the preset may be an object, `name`,
+  `endpoint`, `id` (the endpoint's), `context`, `max_output`, `cost`
+  (dollars per million tokens) and `effort`. On a compatible endpoint
+  Claude Code runs on the model's name, with `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+  `…_SONNET_MODEL` and `…_HAIKU_MODEL` pinned to it,
+  `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`, and
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` and `CLAUDE_CODE_MAX_OUTPUT_TOKENS` from
+  the model; without `--max-budget-usd`, since Claude Code knows no price
+  of the endpoint's models: the plugin keeps `max_cost` at the preset's
+  prices. Example presets for OpenRouter and Ollama.
+- **The contract `agent-run/1`** (the node `run` declares it): the settings
+  `system_mode` (`append`, or `replace`: `--system-prompt-file`), `access`
+  (`read`, `edit`, `exec`: the tools of each level the preset allows; a
+  level the preset cannot give fails the node, naming the tools),
+  `max_tokens` (the step's, under the run's tokens left; 300,000 by
+  default, 2,000,000 at most) and `max_cost`; the output's `stop` (`done`,
+  or `length` when the answer was cut), `cost_source` (`agent`, `prices`
+  or `none`), `executor` (the plugin and Claude Code, with their versions)
+  and `allowed_tools`.
+- The steps that `usage` gives name their `endpoint`; `version` says
+  `probe_skipped` for a preset without an Anthropic endpoint, which has no
+  alias to probe.
+- **Repositories**: a preset's `repos`, the closed list a step may work on
+  (URL, deploy key and pinned host keys for SSH, base branch, the prefix of
+  the steps' branches, the protected ones, the author, the limits, pull
+  requests on Gitea), and the run's `repo` (`name`, `base`, `branch`,
+  `push`, `pr`). The server clones the repository into the step's `repo/`
+  on a branch of its own (`<prefix><run>-<step>`), Claude Code edits the
+  files, and after a step that succeeded the server commits what changed,
+  pushes the branch and opens the pull request; the output's `repo` says
+  the branch, the commit and what changed, and so do the steps of `usage`.
+  The agent never holds the credentials: the git folder lies outside
+  `repo/`, readable and not writable, `work/` is sticky, git runs without
+  hooks or configuration of anyone's, and a hard link, a file that is not
+  a plain one or more than the preset's limits commit nothing. The system
+  prompt says where the repository is, and that the agent does not commit.
+  The manifest's `permissions.network` gains the repositories' hosts.
+- **gosidian's MCP**: a preset's `mcp`, the levels a step may ask for
+  (`read`, `write`), and the run's `mcp`. The manifest's run node says
+  `"mcp": true` and `permissions.mcp` lists the levels; a step with `read`
+  or `write` gives Claude Code gosidian's MCP server at the endpoint of the
+  call's `_meta`, with its token, and approves its tools
+  (`mcp__gosidian__*`). The token is in Claude Code's environment only
+  (`GOSIDIAN_MCP_TOKEN`, which `--mcp-config` names), never in its
+  arguments; the output's `mcp` gives the level, the endpoint and the
+  server's state. A call without the token fails, with why.
+- The image has `git` and `openssh-client`, for the repositories.
+
+### Changed
+- **The run's `model` is an object**, `{name, id, endpoint}`: it was the
+  resolved model's id, a string, which is now `model.id`.
+- **The run's `tools` counts the calls of each tool** (`{"Read": 3}`), as
+  the contract has it: the list of the tools Claude Code had is now
+  `allowed_tools`.
+- `cost` on a compatible endpoint is the tokens the proxy counted at the
+  model's prices (0 without them), not Claude Code's estimate.
+- `subscription` is in a step's output only when its model is on the
+  subscription's endpoint, and `limits.min_left_percent` holds only those
+  steps; a preset needs an `oauth` endpoint for it (at most one).
+- A preset's `credentials` and `upstream` are the endpoint `anthropic`;
+  `endpoints` replaces them (a preset has one or the other).
+
+### Deprecated
+- `max_budget_usd`, in the preset's limits and in the run's settings: it is
+  `max_cost` now, and still read in 0.2.
+
 ## [0.1.1] — 2026-10-17
 
 Dependency updates; nothing changes for gosidian. The manifest is the same

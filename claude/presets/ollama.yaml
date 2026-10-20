@@ -1,0 +1,35 @@
+# Claude Code on a GPU of the LAN: Ollama (0.14 or later serves the
+# Anthropic Messages API at /v1/messages), without a key. An agent needs
+# 64K tokens of context at least: start the server with
+# OLLAMA_CONTEXT_LENGTH=65536 (the API takes no num_ctx). Ollama counts no
+# tokens (the proxy answers 404, and Claude Code estimates them), and has no
+# cache_control or tool_choice. A small local model calls tools less
+# reliably than Claude: try it on the pipeline's own tasks first.
+name: claude-ollama
+description: Claude Code on the LAN's GPU (Ollama)
+endpoints:
+  ollama:
+    url: http://gpu.lan:11434
+    auth: none
+version: latest
+models:
+  # The first is the default. No prices: a step costs 0, and max_cost
+  # never stops it.
+  - name: qwen3-coder
+    id: qwen3-coder:30b
+    context: 65536
+    max_output: 8192
+  - name: gpt-oss
+    id: gpt-oss:20b
+    context: 65536
+    max_output: 8192
+tools:
+  allowed: [Read, Grep, Glob, Write, Edit]
+  default: [Read, Grep, Glob]
+limits:
+  # A local model is slow, and costs nothing.
+  default: {max_turns: 30, max_seconds: 12m, max_tokens: 400000, max_cost: 1}
+  max: {max_turns: 60, max_seconds: 14m, max_tokens: 1000000, max_cost: 1}
+system: |
+  You read the files of the task with your tools before answering, and
+  answer in the language of the task. Name the file a fact comes from.

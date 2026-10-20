@@ -1,9 +1,10 @@
 // The last steps the plugin ran, for a dashboard of what the agent spent:
-// when, for which project and run, on which model, how many tokens and
-// dollars, and the error of those that failed. They are kept in a file of
+// when, for which project and run, on which model and endpoint, how many
+// tokens and dollars, and the error of those that failed. They are kept in a file of
 // the versions' volume, so a restart keeps them; the newest CLAUDE_KEEP_STEPS.
 import fs from "node:fs";
 import path from "node:path";
+import { META } from "./kit/contract.ts";
 
 export interface Step {
   // at is when the step ended.
@@ -11,9 +12,10 @@ export interface Step {
   seconds: number;
   project?: string;
   run?: string;
-  // model is the model it ran on, or the one asked for when it failed
-  // before Claude Code started.
+  // model is the model it ran on (its id), or the name asked for when it
+  // failed before Claude Code started.
   model?: string;
+  endpoint?: string;
   effort?: string | null;
   subtype?: string;
   turns?: number;
@@ -24,6 +26,8 @@ export interface Step {
   cache_write?: number;
   cost?: number;
   claude_code?: string;
+  // repo is the repository the step worked on: its branch and commit.
+  repo?: { name: string; branch?: string; commit?: string };
   error?: string;
 }
 
@@ -81,23 +85,26 @@ export class StepLog {
 // stepOf reads a step's record from the run's output.
 export function stepOf(o: any, meta: Record<string, unknown> | undefined, t0: number, end: number): Step {
   const u = o?.usage ?? {};
+  const model = typeof o?.model === "object" && o.model ? o.model.id : o?.model;
   return {
     at: new Date(end).toISOString(),
     seconds: Math.round((end - t0) / 100) / 10,
     ...origin(meta),
-    ...(o?.model ? { model: String(o.model) } : {}),
+    ...(model ? { model: String(model) } : {}),
+    ...(o?.model?.endpoint ? { endpoint: String(o.model.endpoint) } : {}),
     effort: o?.effort?.applied ?? null,
     ...(o?.subtype ? { subtype: String(o.subtype) } : {}),
     ...(typeof o?.turns === "number" ? { turns: o.turns } : {}),
     ...(typeof u.total_tokens === "number" ? { tokens: u.total_tokens, input: u.input, output: u.output, cache_read: u.cache_read, cache_write: u.cache_write } : {}),
     ...(typeof o?.cost === "number" ? { cost: o.cost } : {}),
     ...(o?.claude_code ? { claude_code: String(o.claude_code) } : {}),
+    ...(o?.repo?.name ? { repo: { name: String(o.repo.name), branch: String(o.repo.branch), ...(o.repo.commit ? { commit: String(o.repo.commit) } : {}) } } : {}),
   };
 }
 
 // origin names the project and the run of gosidian that called.
 export function origin(meta: Record<string, unknown> | undefined): { project?: string; run?: string } {
-  const p = meta?.["gosidian/project"];
-  const r = meta?.["gosidian/run"];
+  const p = meta?.[META.project];
+  const r = meta?.[META.run];
   return { ...(typeof p === "string" && p ? { project: p } : {}), ...(typeof r === "string" && r ? { run: r } : {}) };
 }

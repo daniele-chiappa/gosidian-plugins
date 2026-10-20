@@ -4,7 +4,8 @@
 // the proxy hands here; Claude Code's /usage reads an endpoint instead,
 // which needs a token with the user:profile scope (one from
 // `claude setup-token` has only user:inference, and gets 403). With an API
-// key there is no subscription: the limits are not applicable.
+// key, or no endpoint of Anthropic's, there is no subscription: the limits
+// are not applicable.
 
 export interface Window {
   used_percent: number;
@@ -121,7 +122,9 @@ export function fromEndpoint(body: any, now = new Date()): Snapshot | undefined 
 }
 
 export interface SubscriptionDeps {
-  kind: "oauth" | "api_key";
+  // kind is the preset's: a subscription (an endpoint with auth oauth), an
+  // API key of Anthropic's, or neither.
+  kind: "oauth" | "api_key" | "none";
   // usage asks the usage endpoint; ping makes the smallest request that
   // brings the headers back (it hands them to note itself, as the proxy
   // does for every answer).
@@ -160,10 +163,16 @@ export class Subscription {
     return Boolean(this.latest && this.now().getTime() - Date.parse(this.latest.read_at) <= maxAgeMs);
   }
 
+  get reason(): string {
+    return this.deps.kind === "api_key"
+      ? "an API key: the limits of a subscription do not apply"
+      : "no endpoint of the preset is a subscription: its limits do not apply";
+  }
+
   // read gives the limits no older than maxAgeMs: the last seen, the
   // endpoint's, or those of a ping.
   async read(maxAgeMs: number): Promise<Info> {
-    if (!this.applicable) return { applicable: false, reason: "an API key: the limits of a subscription do not apply" };
+    if (!this.applicable) return { applicable: false, reason: this.reason };
     if (this.fresh(maxAgeMs)) return this.latest!;
     if (!this.endpointOff) {
       try {

@@ -1,8 +1,9 @@
 // Claude Code's event stream (-p --output-format stream-json --verbose):
 // records split on LF only (a JSON string may hold U+2028, which readline
 // would split on), and what a session adds up to: the init event (the
-// resolved model, the tools it has), the turns, and the result event with
-// the answer, the usage, the cost and the denied tool calls.
+// resolved model, the tools it has), the turns and the tool calls, and the
+// result event with the answer, the usage, the cost, the stop reason and
+// the denied tool calls.
 
 // Lines splits a byte stream into its LF-terminated records.
 export class Lines {
@@ -58,18 +59,27 @@ export interface Outcome {
   denials: Denial[];
   errors: string[];
   terminal: string;
+  // stop is the stop reason of the last answer of the model (end_turn,
+  // max_tokens…).
+  stop: string;
   apiError: number | null;
 }
 
 // StreamState follows one Claude Code process.
 export class StreamState {
-  init: { model: string; tools: string[]; version: string; effortActive?: boolean } | undefined;
+  // mcp is the state of each MCP server when the session started, by name
+  // (connected, failed…).
+  init: { model: string; tools: string[]; version: string; effortActive?: boolean; mcp: Record<string, string> } | undefined;
   result: any;
   // turns counts the assistant messages (each a call of the model).
   turns = 0;
   private ids = new Set<string>();
   // text is the text of the last assistant message that had some.
   text = "";
+  // tools counts the calls of each tool: the tool_use blocks of the
+  // assistant's messages, each once.
+  tools: Record<string, number> = {};
+  private calls = new Set<string>();
 
   feed(ev: any): void {
     switch (ev?.type) {
@@ -80,6 +90,7 @@ export class StreamState {
             tools: Array.isArray(ev.tools) ? ev.tools.map(String) : [],
             version: String(ev.claude_code_version ?? ""),
             ...(typeof ev.per_turn_effort_active === "boolean" ? { effortActive: ev.per_turn_effort_active } : {}),
+            mcp: Object.fromEntries((Array.isArray(ev.mcp_servers) ? ev.mcp_servers : []).map((m: any) => [String(m?.name ?? ""), String(m?.status ?? "")])),
           };
         }
         break;
@@ -91,11 +102,20 @@ export class StreamState {
           this.ids.add(id);
           this.turns++;
         }
-        const text = (Array.isArray(m?.content) ? m.content : [])
+        const content: any[] = Array.isArray(m?.content) ? m.content : [];
+        const text = content
           .filter((c: any) => c?.type === "text")
           .map((c: any) => c.text)
           .join("");
         if (text) this.text = text;
+        for (const c of content) {
+          if (c?.type !== "tool_use") continue;
+          const callId = String(c.id ?? "");
+          if (callId && this.calls.has(callId)) continue;
+          if (callId) this.calls.add(callId);
+          const name = String(c.name ?? "");
+          this.tools[name] = (this.tools[name] ?? 0) + 1;
+        }
         break;
       }
       case "result":
@@ -141,6 +161,7 @@ export class StreamState {
       })),
       errors: Array.isArray(r.errors) ? r.errors.map(String) : [],
       terminal: String(r.terminal_reason ?? ""),
+      stop: String(r.stop_reason ?? ""),
       apiError: typeof r.api_error_status === "number" ? r.api_error_status : null,
     };
   }

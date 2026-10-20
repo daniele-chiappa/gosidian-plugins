@@ -1,0 +1,41 @@
+name: agent-kit
+# A PR, or a push that touches agent-kit/, tests the code the agent plugins
+# share (claude, pi): the agent-run/1 contract and the repositories of a
+# step, against bare repositories on disk and a fake Gitea API. It has no
+# image: each plugin copies it into its own.
+
+on:
+  # Every PR runs it, required by the protection of main like the plugins'.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["agent-kit/**", ".github/workflows/agent-kit.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test the agent kit
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: agent-kit
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: npm ci
+        run: npm ci --ignore-scripts --no-audit --no-fund
+
+      - name: Types
+        run: npm run check
+
+      - name: Tests
+        run: npm test
