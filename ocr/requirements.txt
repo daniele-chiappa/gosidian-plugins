@@ -6,4 +6,4 @@ jsonschema==4.26.0
 uvicorn==0.54.0
 # A PDF's pages drawn for the model, and their text layer read.
 pypdfium2==5.13.0
-pillow==12.3.0
+pillow==13.0.0
