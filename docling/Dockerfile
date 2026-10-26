@@ -33,10 +33,15 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 t
 # The rest resolves as PyPI stood on PYPI_BEFORE: the same build every time,
 # and no package younger than two weeks at release (rapidocr 3.10.0 broke
 # docling 2.130 two days after it came out).
-ARG PYPI_BEFORE=2026-10-03T12:00:00Z
-COPY requirements.txt /app/requirements.txt
+ARG PYPI_BEFORE=2026-10-12T07:00:00Z
+# Packages taken newer than PYPI_BEFORE, each as PyPI stood just after its
+# release: Pillow 13 for its advisories, and the docling packages that allow it.
+ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z doclang=2026-10-15T14:55:00Z docling-core=2026-10-22T14:05:00Z docling-parse=2026-10-21T12:02:00Z docling-ibm-models=2026-10-21T11:36:00Z"
+COPY requirements.txt overrides.txt /app/
 RUN pip install uv==0.12.19 \
- && uv pip install --system --exclude-newer "${PYPI_BEFORE}" -r /app/requirements.txt \
+ && uv pip install --system --exclude-newer "${PYPI_BEFORE}" \
+      $(for p in ${PYPI_NEWER}; do printf -- '--exclude-newer-package %s ' "$p"; done) \
+      --override /app/overrides.txt -r /app/requirements.txt \
  && pip uninstall -y uv
 
 # The models live in the image: the plugin needs no network at run time.

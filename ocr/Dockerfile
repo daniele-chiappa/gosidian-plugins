@@ -9,10 +9,14 @@ ENV PIP_NO_CACHE_DIR=1 \
 
 # The packages resolve as PyPI stood on PYPI_BEFORE: the same build every
 # time, and no package younger than two weeks at release.
-ARG PYPI_BEFORE=2026-10-03T12:00:00Z
+ARG PYPI_BEFORE=2026-10-12T07:00:00Z
+# Packages taken newer than PYPI_BEFORE, each as PyPI stood just after its
+# release: Pillow 13 for its advisories.
+ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z"
 COPY requirements.txt /app/requirements.txt
 RUN pip install uv==0.12.19 \
- && uv pip install --system --exclude-newer "${PYPI_BEFORE}" -r /app/requirements.txt \
+ && uv pip install --system --exclude-newer "${PYPI_BEFORE}" \
+      $(for p in ${PYPI_NEWER}; do printf -- '--exclude-newer-package %s ' "$p"; done) -r /app/requirements.txt \
  && pip uninstall -y uv
 
 # The licenses of what the image holds (THIRD_PARTY_NOTICES.md).

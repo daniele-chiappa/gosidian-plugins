@@ -1,0 +1,4 @@
+# Pillow 13 for its advisories, over the pillow<13 that docling 2.138 and
+# docling-slim declare: docling 2.142 allows it, and server.py's
+# png_int_images does what 2.142 changed for it. Drop this with 2.142.
+pillow==13.0.0

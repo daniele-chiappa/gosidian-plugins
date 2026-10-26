@@ -77,7 +77,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.5.4")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.5.5")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
@@ -283,6 +283,42 @@ def converter(ocr: bool, scale: float, backend: str = "pypdfium"):
                 }
             )
         return _converters[key]
+
+
+_png_int_done = False
+
+
+def png_int_images() -> None:
+    """docling 2.138 hands a picture of 32-bit integers (mode I) to PNG as
+    it is, which Pillow 13 refuses (cannot write mode I as PNG): such a
+    picture in a spreadsheet, a presentation, an OpenDocument or an iWork
+    file would fail. docling 2.142 converts it to I;16 first; until the
+    plugin takes that version, this does the same in the readers that call
+    the function, and nothing once docling does it itself."""
+    global _png_int_done
+    with _converters_lock:
+        if _png_int_done:
+            return
+        _png_int_done = True
+        import importlib
+
+        import docling.backend.utils.image as image
+
+        if "I" not in getattr(image, "_PNG_MODES", ()):
+            return
+        original = image.normalize_image_for_png
+
+        def normalize(img):
+            return img.convert("I;16") if img.mode == "I" else original(img)
+
+        for name in ("docling.backend.utils.image", "docling.backend.msexcel_backend", "docling.backend.mspowerpoint_backend",
+                     "docling.backend.opendocument_backend", "docling.backend.iwork_backend"):
+            try:
+                mod = importlib.import_module(name)
+            except ImportError:
+                continue  # a reader the image or the tests do not have
+            if getattr(mod, "normalize_image_for_png", None) is original:
+                mod.normalize_image_for_png = normalize
 
 
 def office_convert(path: pathlib.Path, into: str, target: str) -> pathlib.Path:
@@ -756,6 +792,7 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
     from docling.datamodel.base_models import DocumentStream, InputFormat
     from docling_core.types.doc import ImageRefMode, PictureItem, TableItem
 
+    png_int_images()
     raw = source
     if isinstance(source, bytes):
         source = DocumentStream(name=name, stream=io.BytesIO(source))
@@ -795,6 +832,10 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         if img is not None:
             fname = f"fig-{len(files) + 1}.png"
             buf = io.BytesIO()
+            # Pillow 13 no longer clips a 32-bit image to 16 bits in a PNG:
+            # docling-core 2.104 converts it first, and so does the plugin.
+            if img.mode == "I":
+                img = img.convert("I;16")
             img.save(buf, format="PNG")
             files.append((fname, buf.getvalue()))
             page = item.prov[0].page_no if item.prov else None

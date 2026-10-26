@@ -78,7 +78,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.1.0")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.1.1")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 SERVER_URL = os.environ.get("OCR_SERVER_URL", "").strip().rstrip("/")
 API_KEY = os.environ.get("OCR_API_KEY", "").strip()

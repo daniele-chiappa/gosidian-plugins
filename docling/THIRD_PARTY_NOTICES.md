@@ -26,7 +26,7 @@ Python 3.12 (PSF-2.0), and 118 packages installed with pip. The main ones:
 |---|---|
 | docling, docling-core, docling-ibm-models, docling-parse | MIT |
 | mcp, python-pptx | MIT |
-| torch (CPU build), transformers, huggingface-hub, safetensors, rapidocr | Apache-2.0 |
+| torch (CPU build), transformers, huggingface-hub, safetensors, rapidocr, doclang | Apache-2.0 |
 | torchvision, uvicorn, numpy, scipy | BSD |
 | pypdfium2 (with PDFium) | BSD-3-Clause and Apache-2.0 |
 | pillow | MIT-CMU |

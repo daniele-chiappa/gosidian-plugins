@@ -4,7 +4,7 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
-## [0.3.3] — unreleased
+## [0.3.3] — 2026-10-26
 
 pi 1.1.0, and dependency updates for an advisory; nothing changes for
 gosidian. The manifest is the same but for the version.

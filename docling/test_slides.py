@@ -105,6 +105,21 @@ def _chart_data():
     return data
 
 
+def int_deck() -> bytes:
+    """One slide with a picture of 32-bit integers (a TIFF in mode I)."""
+    pic = Image.new("I", (40, 20))
+    pic.putdata([i * 1000 for i in range(40 * 20)])
+    buf = io.BytesIO()
+    pic.save(buf, format="TIFF")
+    buf.seek(0)
+    prs = Presentation()
+    s = prs.slides.add_slide(prs.slide_layouts[6])
+    s.shapes.add_picture(buf, Inches(1), Inches(1), Inches(4), Inches(2))
+    out = io.BytesIO()
+    prs.save(out)
+    return out.getvalue()
+
+
 def pptx_converter(*_args, **_kwargs):
     from docling.datamodel.base_models import InputFormat
     from docling.document_converter import DocumentConverter
@@ -125,6 +140,12 @@ class SlidesTest(unittest.TestCase):
 
     def sections(self, md):
         return re.findall(r"^## (.*)$", md, flags=re.M)
+
+    def test_a_picture_of_32_bit_integers(self):
+        # Pillow 13 writes no mode I PNG: the picture comes back as I;16.
+        result, files = server.convert_sync("ints.pptx", int_deck(), 1 << 24, False, True, 200, 2.0, "pypdfium", {"notes": False, "slide_label": "Slide", "notes_label": "Notes"})
+        self.assertEqual(len(files), 1, result["markdown"])
+        self.assertEqual(Image.open(io.BytesIO(files[0][1])).mode, "I;16")
 
     def test_a_section_per_slide(self):
         result, _ = self.convert()

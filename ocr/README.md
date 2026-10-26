@@ -112,7 +112,7 @@ slot and 8k); on a CPU (6 cores of a Ryzen 7 5700G) about 100 s a page.
 ```yaml
 services:
   gosidian-ocr:
-    image: ghcr.io/daniele-chiappa/gosidian-ocr:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-ocr:0.1.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${OCR_TOKEN:?}
@@ -161,7 +161,7 @@ stay in memory meanwhile, about 12 MB a page of A4.
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.1.0 -t gosidian-ocr:0.1.0 ocr/
+docker build --build-arg VERSION=0.1.1 -t gosidian-ocr:0.1.1 ocr/
 ```
 
 The image is built for amd64 (about 300 MB: no model, no torch).

@@ -4,6 +4,52 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.5] — 2026-10-26
+
+Pillow 13 for its advisories, and docling 2.138.0: Arabic read from a PDF
+comes out much better, and the labels of a Word document's text boxes are
+kept. The manifest is the same but for the version.
+
+### Security
+- **Pillow** 12.3.0 → 13.0.0, for twelve advisories fixed only there: one
+  critical ([GHSA-5x8w-8jj5-q52h](https://github.com/advisories/GHSA-5x8w-8jj5-q52h),
+  a heap overflow in FlashPix decoding, which the image can read since it
+  holds `olefile`), six high (among them
+  [GHSA-78g4-xqwv-q3g8](https://github.com/advisories/GHSA-78g4-xqwv-q3g8),
+  the bundled OpenJPEG, and decoders that expand a small file into
+  unbounded memory) and five medium. The pictures of a document go through
+  these decoders. Pillow is not in `requirements.txt` before this release,
+  so Dependabot did not report it.
+- With it docling-core 2.104.0, docling-parse 7.22.4 and docling-ibm-models
+  4.0.4, the first to allow Pillow 13. docling-core also caps the cells of
+  a document's tables and escapes the values of HTML attributes; docling-parse
+  no longer hangs on some curves and reads images under a JBIG2 mask.
+- docling 2.138 itself still declares `pillow<13`: `overrides.txt` lifts
+  that bound, and the plugin converts a picture of 32-bit integers to 16
+  bits before it becomes a PNG, which Pillow 13 requires and docling 2.142
+  does itself. Both go when the plugin takes docling 2.142.
+
+### Changed
+- **docling** 2.133.0 → 2.138.0, with docling-core 2.101.1, docling-parse
+  7.22.2, pypdfium2 5.14.0 and rapidocr 3.10.0. On gosidian's conversion
+  bench (30 pages against their reference transcriptions, and the whole
+  documents they come from):
+  - 28 pages come out the same, byte for byte;
+  - the two pages of an Arabic manual read from its PDF are much closer
+    to the reference: text 0.30 → 0.53 and 0.32 → 0.67, headings 0.33 →
+    0.67 and 0 → 0.67;
+  - a Word document read natively keeps the letters and marks of the text
+    boxes over its pictures (`A`, `B`, `N`, `*`), and a lettered list
+    inside a numbered one is nested; on the one docx measured whole, text
+    0.994 → 0.988, words the same;
+  - in a presentation, some lines of a slide are no longer written as a
+    list item; the text and the speaker notes are the same;
+  - a spreadsheet's cells are the same;
+  - with docling-core 2.104.0 a picture inside a table's cell of a Word
+    document read natively stays in its cell (tables 0.75 → 0.77 on the
+    `.doc` pages); Pillow 13 changes nothing else: the 30 pages and all
+    their pictures come out the same, byte for byte.
+
 ## [0.5.4] — 2026-10-26
 
 Headings deeper than markdown's six levels; nothing else changes for

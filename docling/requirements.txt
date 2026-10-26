@@ -1,5 +1,14 @@
 # torch and torchvision come from the CPU index first (Dockerfile).
-docling==2.133.0
+docling==2.138.0
+# Pillow 13 for its advisories (critical and high, in the decoders a
+# document's pictures go through), with the first docling-core, docling-parse
+# and docling-ibm-models that allow it; docling 2.138 does not, so
+# overrides.txt lifts its bound. Newer than PYPI_BEFORE: PYPI_NEWER in the
+# Dockerfile.
+pillow==13.0.0
+docling-core==2.104.0
+docling-parse==7.22.4
+docling-ibm-models==4.0.4
 mcp==2.3.0
 # Used by the server itself: mcp 2 no longer brings httpx.
 httpx==0.28.1
