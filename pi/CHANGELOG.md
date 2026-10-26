@@ -4,6 +4,23 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.3.3] — unreleased
+
+pi 1.1.0, and dependency updates for an advisory; nothing changes for
+gosidian. The manifest is the same but for the version.
+
+### Security
+- **zod** 4.6.5 → 4.6.6 ([GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5),
+  high), through which the MCP SDK checks the tools' arguments.
+
+### Changed
+- **pi** (`@earendil-works/pi-coding-agent`) 1.0.4 → 1.1.0, alone: none
+  of the packages it needs changes. In gosidian's lab a step with files
+  and a JSON answer on a local model, and a step that reads and writes
+  notes through gosidian's MCP, work as with 1.0.4; the image passes the
+  separation test.
+- @modelcontextprotocol/sdk 1.32.1, @types/node 24.19.2.
+
 ## [0.3.2] — 2026-10-25
 
 From gosidian's fitness pilot, second run (2026-10-25).

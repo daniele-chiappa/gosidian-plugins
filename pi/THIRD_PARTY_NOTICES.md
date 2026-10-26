@@ -6,7 +6,7 @@ others, unmodified, under their own licenses.
 
 ## Node packages
 
-[pi](https://pi.dev) (`@earendil-works/pi-coding-agent` 1.0.4, MIT, by
+[pi](https://pi.dev) (`@earendil-works/pi-coding-agent` 1.1.0, MIT, by
 Earendil Inc. and contributors), the
 [MCP TypeScript SDK](https://github.com/modelcontextprotocol/typescript-sdk)
 (MIT), ajv (MIT), yaml (ISC), zod (MIT), and the packages they need: 234
