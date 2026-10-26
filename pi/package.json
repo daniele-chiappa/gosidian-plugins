@@ -14,7 +14,7 @@
     "check": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "1.0.4",
+    "@earendil-works/pi-coding-agent": "1.1.0",
     "@modelcontextprotocol/sdk": "1.32.0",
     "ajv": "8.20.0",
     "yaml": "2.9.1",
