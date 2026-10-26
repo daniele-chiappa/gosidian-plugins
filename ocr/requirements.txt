@@ -1,5 +1,5 @@
 # The client of the OCR model: layout, then each block's content (Apache-2.0).
-mineru-vl-utils==2.0.5
+mineru-vl-utils==2.0.7
 mcp==2.3.0
 httpx==0.28.1
 jsonschema==4.26.0
