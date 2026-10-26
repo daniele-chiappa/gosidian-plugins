@@ -113,7 +113,10 @@ test("the limits stop the agent: turns, tokens (the run's too), time, cancel", a
     await assert.rejects(runStep(env, { prompt: "x", max_turns: 2 }, undefined, never), /stopped at max_turns \(2 turns\)/);
   });
   await withStep(loop, async ({ env }) => {
-    await assert.rejects(runStep(env, { prompt: "x" }, 700, never), /stopped at max_tokens/);
+    await assert.rejects(runStep(env, { prompt: "x" }, 700, never), (e: Error) => {
+      const spent = (e as StepError).spent as { usage?: { total_tokens?: number }; cost?: number } | undefined;
+      return e instanceof StepError && /stopped at max_tokens/.test(e.message) && (spent?.usage?.total_tokens ?? 0) > 0 && typeof spent?.cost === "number";
+    });
   });
   await withStep([{ text: "x" }], async ({ llm, env }) => {
     await assert.rejects(runStep(env, { prompt: "x" }, 0, never), /no language-model tokens left/);
@@ -169,6 +172,7 @@ test("a step on a repository: the agent edits repo/, the plugin commits on the s
     assert.equal(r.base, "main");
     assert.match(r.branch, /^agent\/r-7-[0-9a-f]{16}$/);
     assert.equal(r.changed, 2);
+    assert.deepEqual(r.files, ["a.txt", "b.txt"]);
     assert.equal(r.insertions, 2);
     assert.equal(r.pushed, true);
     assert.match(r.commit, /^[0-9a-f]{40}$/);

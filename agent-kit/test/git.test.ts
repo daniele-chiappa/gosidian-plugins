@@ -95,6 +95,7 @@ test("a step: clone on its branch, the agent edits, the server commits and pushe
   assert.equal(fs.existsSync(mark), false, "a hook ran");
   assert.equal(out.branch, "agent/r1-s1");
   assert.equal(out.changed, 3);
+  assert.deepEqual(out.files, [".gitattributes", "a.txt", "b.txt"]);
   assert.equal(out.insertions, 3);
   assert.equal(out.pushed, true);
   assert.match(out.commit ?? "", /^[0-9a-f]{40}$/);
@@ -108,9 +109,25 @@ test("nothing changed: no commit, no push", async () => {
   const w = await Workspace.open(repoOf(origin()), { name: "app" }, { ...s, defaultBranch: "agent/r2-s1" });
   const out = await w.finish("nothing");
   assert.equal(out.changed, 0);
+  assert.deepEqual(out.files, []);
   assert.equal(out.pushed, false);
   assert.equal(out.commit, undefined);
   assert.match(out.note ?? "", /nothing changed/);
+});
+
+test("files: the paths the commit changed, sorted; a renamed file is its old path and its new one", async () => {
+  const bare = origin();
+  const s = step();
+  const w = await Workspace.open(repoOf(bare), { name: "app" }, { ...s, defaultBranch: "agent/r6-s1" });
+  fs.mkdirSync(path.join(s.workTree, "bin"));
+  fs.renameSync(path.join(s.workTree, "run.sh"), path.join(s.workTree, "bin", "run.sh"));
+  fs.rmSync(path.join(s.workTree, "a.txt"));
+  fs.mkdirSync(path.join(s.workTree, "z dir"));
+  fs.writeFileSync(path.join(s.workTree, "z dir", "è nuovo.md"), "nuovo\n");
+  const out = await w.finish("agent r6: move, delete, add");
+  assert.deepEqual(out.files, ["a.txt", "bin/run.sh", "run.sh", "z dir/è nuovo.md"]);
+  assert.equal(out.changed, out.files.length);
+  assert.deepEqual(git(bare, "-c", "core.quotePath=false", "show", "--name-only", "--no-renames", "--format=", "agent/r6-s1").trim().split("\n").sort(), out.files);
 });
 
 test("branches: under the prefix, never base or a protected one", async () => {

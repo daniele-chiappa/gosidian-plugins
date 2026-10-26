@@ -12,7 +12,17 @@ export interface FileRef {
   url?: string;
 }
 
-export class StepError extends Error {}
+// StepError is a step's failure that says why; spent, when the agent ran
+// before it failed, is what the step spent (usage, cost): the error's
+// structured content, which gosidian counts in the task and the team's
+// budget.
+export class StepError extends Error {
+  spent?: Record<string, unknown>;
+  constructor(message: string, spent?: Record<string, unknown>) {
+    super(message);
+    this.spent = spent;
+  }
+}
 
 // safeName keeps a file name a plain name: no folders, no dots in front.
 export function safeName(name: string, fallback: string): string {

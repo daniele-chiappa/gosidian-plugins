@@ -18,7 +18,9 @@ import (
 // The API of a bot, for the widget and for sites:
 //
 //	GET  /api/bots/<bot>              its title, welcome, scopes, handoff and dates
-//	POST /api/bots/<bot>/messages     {message, session, scopes, as_of} → the answer
+//	POST /api/bots/<bot>/messages     {message, session, scopes, as_of} → the answer;
+//	                                  with Accept: text/event-stream, the
+//	                                  text as it comes, then the answer
 //	POST /api/bots/<bot>/ratings      {session, turn, rating, comment}
 //	POST /api/bots/<bot>/handoff      {session, message, contact} → the bot's reply
 //	GET  /api/bots/<bot>/images/<id>  an image of an answer
@@ -208,13 +210,30 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 	if in.AsOf != "" {
 		input["as_of"] = in.AsOf
 	}
-	answer, run, err := p.start(r.Context(), b, input, p.set.Wait)
+	// A widget that asks for a stream gets the text as the model writes it,
+	// then the answer.
+	var (
+		events *eventWriter
+		answer any
+		run    string
+		err    error
+	)
+	if wantsEvents(r) {
+		events = newEventWriter(w)
+		answer, run, err = p.startStream(r.Context(), b, input, p.set.Wait, events.relay)
+	} else {
+		answer, run, err = p.start(r.Context(), b, input, p.set.Wait)
+	}
 	if err != nil {
+		status, msg := http.StatusBadGateway, "the bot could not answer"
 		var se2 statusError
 		if errors.As(err, &se2) {
-			writeError(w, se2.status, se2.msg)
+			status, msg = se2.status, se2.msg
+		}
+		if events != nil {
+			events.send("error", map[string]any{"status": status, "error": msg})
 		} else {
-			writeError(w, http.StatusBadGateway, "the bot could not answer")
+			writeError(w, status, msg)
 		}
 		p.log.Warn("message", "bot", b.Name, "run", run, "via", c.Via, "err", err)
 		return
@@ -237,7 +256,12 @@ func (p *Plugin) message(w http.ResponseWriter, r *http.Request, b *Bot, c Calle
 	se.answers[turn] = true
 	se.messages++
 	se.last.Store(now.UnixNano())
-	writeJSON(w, http.StatusOK, map[string]any{"session": se.ID, "turn": turn, "answer": ans})
+	out := map[string]any{"session": se.ID, "turn": turn, "answer": ans}
+	if events != nil {
+		events.send("answer", out)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // sourceLinks gives each source of an answer with a doc the address of
@@ -378,46 +402,68 @@ func (e statusError) Error() string { return strconv.Itoa(e.status) + " " + e.ms
 // start starts the bot's pipeline with its run token and waits for its
 // answer: the output of the node the pipeline names as its answer.
 func (p *Plugin) start(ctx context.Context, b *Bot, input map[string]any, wait time.Duration) (any, string, error) {
-	body, err := json.Marshal(map[string]any{"input": input, "wait": int(wait / time.Second)})
-	if err != nil {
-		return nil, "", err
-	}
 	cctx, cancel := context.WithTimeout(ctx, wait+15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(cctx, http.MethodPost, b.Run.URL, bytes.NewReader(body))
-	if err != nil {
-		return nil, "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+b.Run.Token)
-	resp, err := p.client.Do(req)
+	resp, err := p.post(cctx, b, input, wait, "application/json")
 	if err != nil {
 		return nil, "", err
 	}
 	defer resp.Body.Close()
+	return readReply(resp)
+}
+
+// post starts the bot's pipeline, its answer as accept.
+func (p *Plugin) post(ctx context.Context, b *Bot, input map[string]any, wait time.Duration, accept string) (*http.Response, error) {
+	body, err := json.Marshal(map[string]any{"input": input, "wait": int(wait / time.Second)})
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, b.Run.URL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", accept)
+	req.Header.Set("Authorization", "Bearer "+b.Run.Token)
+	return p.client.Do(req)
+}
+
+// runReply is what gosidian answers a start that waits: the run, and its
+// answer once it ended.
+type runReply struct {
+	Run struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	} `json:"run"`
+	Answer any `json:"answer"`
+	Error  struct {
+		Message string `json:"message"`
+	} `json:"error"`
+	// Status is the status of the answer, in the event of a stream.
+	Status int `json:"status"`
+}
+
+func readReply(resp *http.Response) (any, string, error) {
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
 		return nil, "", err
 	}
-	var out struct {
-		Run struct {
-			ID     string `json:"id"`
-			Status string `json:"status"`
-			Error  string `json:"error"`
-		} `json:"run"`
-		Answer any `json:"answer"`
-		Error  struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
+	var out runReply
 	_ = json.Unmarshal(raw, &out)
+	return out.outcome(resp.StatusCode)
+}
+
+// outcome is the run's answer, or the error the chat is told, by the
+// status gosidian answered with.
+func (out runReply) outcome(status int) (any, string, error) {
 	switch {
-	case resp.StatusCode == http.StatusTooManyRequests:
+	case status == http.StatusTooManyRequests:
 		return nil, "", statusError{http.StatusTooManyRequests, "the bot is busy: try again in a minute"}
-	case resp.StatusCode == http.StatusAccepted:
+	case status == http.StatusAccepted:
 		return nil, out.Run.ID, statusError{http.StatusGatewayTimeout, "the answer takes too long: try again"}
-	case resp.StatusCode != http.StatusOK:
-		return nil, out.Run.ID, fmt.Errorf("gosidian answered %s: %s", resp.Status, out.Error.Message)
+	case status != http.StatusOK:
+		return nil, out.Run.ID, fmt.Errorf("gosidian answered %d %s: %s", status, http.StatusText(status), out.Error.Message)
 	case out.Run.Status != "done":
 		return nil, out.Run.ID, fmt.Errorf("the run ended %s: %s", out.Run.Status, out.Run.Error)
 	}

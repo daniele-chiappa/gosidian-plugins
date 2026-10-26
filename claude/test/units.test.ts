@@ -91,8 +91,8 @@ test("a preset gets its defaults", () => {
   assert.deepEqual(p.effort, { allowed: ["low", "medium", "high", "xhigh", "max"] });
   assert.equal(p.version, "latest");
   assert.deepEqual(p.endpoints, { anthropic: { name: "anthropic", url: "https://api.anthropic.com", auth: "oauth", key_file: "/run/secrets/t", key_env: undefined, headers: {} } }, "credentials and upstream are the endpoint anthropic");
-  assert.deepEqual(p.limits.default, { max_turns: 20, max_seconds: 600, max_tokens: 300_000, max_cost: 1 });
-  assert.deepEqual(p.limits.max, { max_turns: 100, max_seconds: 840, max_tokens: 2_000_000, max_cost: 10 });
+  assert.deepEqual(p.limits.default, { max_turns: 20, max_seconds: 600, max_tokens: 3_000_000, max_cost: 1 });
+  assert.deepEqual(p.limits.max, { max_turns: 100, max_seconds: 840, max_tokens: 6_000_000, max_cost: 10 });
   assert.deepEqual(p.limits.min_left_percent, { session: 0, week: 0 });
   assert.deepEqual(aliasesOf(p), ["haiku", "sonnet", "opus"]);
   const k = parsePreset("name: claude\ncredentials: {api_key_env: ANTHROPIC_KEY}\nupstream: http://api.lan/\ntools: {allowed: [Read, Write, Bash]}\nlimits: {default: {max_seconds: 5m, max_budget_usd: 0.5}}\n");
@@ -121,7 +121,7 @@ test("a preset refuses what does not hold", () => {
     ["name: x\ncredentials: {api_key_file: /k}\nlimits: {min_left_percent: {week: 10}}", /needs a subscription/],
     [base + "models: [sonnet, sonnet]", /duplicate/],
     [base + "limits: {default: {max_cost: 1, max_budget_usd: 1}}", /max_cost and max_budget_usd/],
-    [base + "limits: {max: {max_tokens: 100000}}", /limits.default.max_tokens 300000 is over limits.max.max_tokens 100000/],
+    [base + "limits: {max: {max_tokens: 100000}}", /limits.default.max_tokens 3000000 is over limits.max.max_tokens 100000/],
     [base + "mcp: [admin]", /allowed values/],
     [base + "mcp: [none]", /allowed values/],
     [base + "repos: [{name: App, url: /srv/app.git}]", /pattern/],
@@ -198,8 +198,8 @@ test("the run node's schema follows the preset", () => {
   assert.deepEqual(s.properties.tools.items.enum, ["Read", "Grep", "Glob", "Write"]);
   assert.deepEqual(s.properties.tools.default, ["Read", "Grep", "Glob"]);
   assert.equal(s.properties.max_turns.maximum, 20);
-  assert.equal(s.properties.max_tokens.maximum, 2_000_000);
-  assert.equal(s.properties.max_tokens.default, 300_000);
+  assert.equal(s.properties.max_tokens.maximum, 6_000_000);
+  assert.equal(s.properties.max_tokens.default, 3_000_000);
   assert.equal(s.properties.max_cost.maximum, 2);
   assert.equal(s.properties.max_cost.default, 1);
   assert.equal(s.properties.max_budget_usd.deprecated, true);
@@ -230,7 +230,7 @@ test("access: the tools of each level the preset allows, or those missing", () =
 
 test("settingsOf fills the defaults and refuses what the preset does not allow", () => {
   const p = preset("http://api.test");
-  assert.deepEqual(settingsOf(p, { prompt: "x", files: [{ url: "u" }] }), { prompt: "x", system_mode: "append", model: "sonnet", tools: ["Read", "Grep", "Glob"], max_turns: 6, max_seconds: 60, max_tokens: 300_000, max_cost: 1 });
+  assert.deepEqual(settingsOf(p, { prompt: "x", files: [{ url: "u" }] }), { prompt: "x", system_mode: "append", model: "sonnet", tools: ["Read", "Grep", "Glob"], max_turns: 6, max_seconds: 60, max_tokens: 3_000_000, max_cost: 1 });
   assert.equal(settingsOf(p, { prompt: "x", max_budget_usd: 0.5 }).max_cost, 0.5, "max_budget_usd (deprecated) is max_cost");
   assert.equal((settingsOf(p, { prompt: "x", max_budget_usd: 0.5 }) as any).max_budget_usd, undefined);
   for (const [args, why] of [
@@ -241,7 +241,7 @@ test("settingsOf fills the defaults and refuses what the preset does not allow",
     [{ prompt: "x", max_budget_usd: 0 }, /must be > 0/],
     [{ prompt: "x", max_budget_usd: 3 }, /max_cost must be <= 2/],
     [{ prompt: "x", max_cost: 1, max_budget_usd: 1 }, /max_cost and max_budget_usd/],
-    [{ prompt: "x", max_tokens: 3_000_000 }, /must be <= 2000000/],
+    [{ prompt: "x", max_tokens: 7_000_000 }, /must be <= 6000000/],
     [{ prompt: "x", system_mode: "prepend" }, /allowed values/],
     [{ prompt: "x", schema: { type: "nope" } }, /not a JSON Schema/],
     [{ prompt: "" }, /fewer than 1 characters/],
@@ -328,6 +328,21 @@ test("the system prompt: the workspace, the preset's, the node's", () => {
   assert.match(systemPrompt(p, settingsOf(p, { prompt: "x", tools: ["Write"] }), []), /No files come.*\n.*out\//);
   assert.match(systemPrompt(p, settingsOf(p, { prompt: "x", json: true }), []), /## Answer\nAnswer with a single JSON value/);
   assert.doesNotMatch(systemPrompt(p, settingsOf(p, { prompt: "x", json: true, schema: { type: "object" } }), []), /## Answer/);
+});
+
+test("the system prompt: a step that writes notes of the vault, not files, is told so", () => {
+  const p = preset("http://api.test");
+  const s = settingsOf(p, { prompt: "x" });
+  const w = systemPrompt(p, s, [], undefined, "write");
+  assert.match(w, /You cannot write files in this task: the notes it asks for go into gosidian's vault/);
+  assert.doesNotMatch(w, /answer with text/);
+  assert.match(w, /## gosidian\nThe MCP server gosidian \(tools mcp__gosidian__memory_\*\) reads and writes/);
+  assert.match(w, /memory_create, memory_update or memory_edit/);
+  const r = systemPrompt(p, s, [], undefined, "read");
+  assert.match(r, /cannot write files in this task: answer with text/);
+  assert.match(r, /reads the vault of the run's project: you cannot change its notes/);
+  assert.doesNotMatch(systemPrompt(p, s, []), /## gosidian/);
+  assert.doesNotMatch(systemPrompt(p, s, [], undefined, "none"), /## gosidian/);
 });
 
 test("effortOf: the effort the requests carried, or a note", () => {

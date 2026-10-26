@@ -7,7 +7,8 @@ pipeline hands it, and answers with text or JSON, giving back the files it
 writes. Two more nodes keep its version: `version` says whether a newer one
 is out and what its aliases resolve to, `update` installs one aside, tries
 it and puts it in use. A fourth, `usage`, says how much of the
-subscription's session and week is left.
+subscription's session and week is left. With repositories that have pull
+requests, a fifth, `pr`, merges or closes the pull request a step opened.
 
 **Claude Code is not in the image**: its license is not open ("© Anthropic
 PBC. All rights reserved"). At the first start the plugin installs it from
@@ -171,7 +172,7 @@ the server must refuse to commit.
 ```yaml
 services:
   claude:
-    image: ghcr.io/daniele-chiappa/gosidian-claude:0.2.1
+    image: ghcr.io/daniele-chiappa/gosidian-claude:0.3.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${CLAUDE_PLUGIN_TOKEN:?}
@@ -244,8 +245,8 @@ tools:
   allowed: [Read, Grep, Glob]    # Write, Edit, Bash, WebFetch… on purpose
   default: [Read, Grep, Glob]
 limits:
-  default: {max_turns: 20, max_seconds: 10m, max_tokens: 300000, max_cost: 1}
-  max: {max_turns: 60, max_seconds: 14m, max_tokens: 2000000, max_cost: 5}
+  default: {max_turns: 20, max_seconds: 10m, max_tokens: 3000000, max_cost: 1}
+  max: {max_turns: 60, max_seconds: 14m, max_tokens: 6000000, max_cost: 5}
   min_left_percent: {session: 0, week: 0}   # a subscription only; 0: off
 system: |                        # added to Claude Code's system prompt
   Answer in the language of the task.
@@ -262,8 +263,8 @@ version changes only with the `update` node. A change of the preset
 changes the manifest: `gosidian plugin show`, then `gosidian plugin
 accept`.
 
-The limits' defaults are 20 turns, 10 minutes, 300,000 tokens and $1; at
-most 100 turns, 14 minutes, 2,000,000 tokens and $10. `max_tokens` counts
+The limits' defaults are 20 turns, 10 minutes, 3,000,000 tokens and $1; at
+most 100 turns, 14 minutes, 6,000,000 tokens and $10. `max_tokens` counts
 the four kinds together (input, output, read from and written to the
 cache), as the run's `max_llm_tokens` does. `max_cost` is in US dollars:
 on Anthropic's endpoints at the API's list prices (Claude Code's
@@ -374,7 +375,8 @@ names its own, and the node's `model` picks among all of them.
 `repos` is the closed list of the repositories a step may work on (the
 node's `repo`). The plugin's server clones one on a branch of the step's
 own, the agent edits its files, and the server commits what changed,
-pushes the branch and, where the preset says so, opens a pull request.
+pushes the branch and, where the preset says so, opens a pull request,
+which the node `pr` then merges or closes.
 
 | Field | Default | |
 |---|---|---|
@@ -421,7 +423,7 @@ in a node's settings: it still works in 0.2, and goes later.
 ## The nodes
 
 Each node is also a tool for the agents, with the access a token needs
-(`run` and `update` write, `version` and `usage` read), in the projects the
+(`run`, `update` and `pr` write, `version` and `usage` read), in the projects the
 owner exposes the plugin in.
 
 ### `<agent>.run`
@@ -474,8 +476,10 @@ Output:
 - `executor`: `plugin` (`gosidian-claude`), `version` (the plugin's),
   `agent` (`claude-code`), `agent_version` (the version that ran);
 - `repo`, with `repo`: `name`, `base`, `branch`, `commit` (none when
-  nothing changed, and `note` says so), `changed` (files), `insertions`,
-  `deletions`, `pushed`, `pr_url`;
+  nothing changed, and `note` says so), `changed` (files), `files` (their
+  paths in the repository, sorted: added, modified, deleted, a renamed
+  file as its old path and its new one; none when nothing changed),
+  `insertions`, `deletions`, `pushed`, `pr_url`;
 - `mcp`, with `mcp`: `level`, `url` and `status` (gosidian's server as
   Claude Code found it at the start: `connected`, `failed`…); never the
   token;
@@ -629,6 +633,44 @@ has only `user:inference` and gets 403, so the plugin tries it once and
 then keeps to the headers. Values older than `max_age` are read again with
 a request of one token to the cheapest model.
 
+### `<agent>.pr`
+
+Only with a repository that has `pr` in the preset. It merges or closes a
+pull request a step opened, with the preset's token, then deletes its
+branch: a pipeline, or the coordinator of a team of agents, takes the
+agent's work or drops it. Only a pull request of the repository itself
+(the URL of another fails), from a branch under the preset's prefix
+(`agent/`): any other fails the node before anything changes. It needs no
+files and no MCP.
+
+| Setting | Default | |
+|---|---|---|
+| `repo` | required | a repository of the preset with `pr` |
+| `number`, `url` | one of them | the pull request: its number, or its URL as `run` gives it (`repo.pr_url`) |
+| `action` | required | `merge` (into its base) or `close` (unmerged) |
+| `style` | `merge` | how a merge is made, Gitea's `Do`: `merge`, `rebase` or `squash` |
+| `delete_branch` | true | then delete the pull request's branch; never a protected one |
+| `title`, `message` | Gitea's | the merge commit's |
+
+Output: `repo`, `number`, `url`, `action`, `branch` (the pull request's),
+`merged`, `closed`, `sha` (the merge commit, when merged),
+`branch_deleted` (the branch is gone: deleted now, or before) and `note`
+(a merge or a close done already, a branch kept and why). A pull request
+merged or closed already is no error, so a retry finds it as it is.
+Gitea's refusals fail the node with their status: 405 (not mergeable, or
+not yet), 409 (a conflict with the base), 404. A branch Gitea does not
+delete leaves the merge or the close as it is, and `note` says why.
+
+```yaml
+- id: take
+  use: claude.pr
+  with:
+    repo: app
+    url: "{{ agent.repo.pr_url }}"
+    action: merge
+    style: squash
+```
+
 ## Environment
 
 | Variable | Default | |
@@ -654,7 +696,7 @@ meanwhile waits for an install in progress, and fails with its reason.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.1 --build-context kit=agent-kit -t gosidian-claude:0.2.1 claude/
+docker build --build-arg VERSION=0.3.0 --build-context kit=agent-kit -t gosidian-claude:0.3.0 claude/
 claude/scripts/test.sh               # types and tests, in node:24-alpine
 claude/scripts/separation-test.sh    # the image as in production: users, secrets, links, leftovers
 TOKEN_FILE=… claude/scripts/smoke-test.sh   # the real Claude Code and API: install, probe, run, version, usage

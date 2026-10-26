@@ -8,9 +8,12 @@
 // user's configuration, without filters.
 import fs from "node:fs";
 import path from "node:path";
-import type { Repo } from "./repos.ts";
+import { RepoError, type Repo } from "./repos.ts";
 import { exec } from "./exec.ts";
+import { openPR } from "./pulls.ts";
 import { knownHostsFile, sshCommand } from "./ssh.ts";
+
+export { RepoError };
 
 export interface RepoRequest {
   name: string;
@@ -26,14 +29,17 @@ export interface RepoOutput {
   branch: string;
   commit?: string;
   changed: number;
+  // files are the paths in the repository of the files the commit changed,
+  // sorted: added, modified, deleted, and a renamed one as its old path and
+  // its new one (the diff runs with --no-renames). As many as changed, so
+  // at most the preset's max_files.
+  files: string[];
   insertions: number;
   deletions: number;
   pushed: boolean;
   pr_url?: string;
   note?: string;
 }
-
-export class RepoError extends Error {}
 
 // What every git command of the server runs with, whatever the repository
 // or the agent wrote: no hooks, no fsmonitor, no ext:: transport, no
@@ -168,19 +174,21 @@ export class Workspace {
   // pushes the branch and opens the pull request, as the request says.
   async finish(message: string): Promise<RepoOutput> {
     if (this.readOnly) throw new RepoError(`repository ${this.repo.name} is a checkout: nothing is committed`);
-    const out: RepoOutput = { name: this.repo.name, base: this.base, branch: this.branch, changed: 0, insertions: 0, deletions: 0, pushed: false };
+    const out: RepoOutput = { name: this.repo.name, base: this.base, branch: this.branch, changed: 0, files: [], insertions: 0, deletions: 0, pushed: false };
     const { files, bytes } = await this.scan();
     if (files > this.repo.max_files) throw new RepoError(`${files} files changed, at most ${this.repo.max_files}: nothing committed`);
     if (bytes > this.repo.max_bytes) throw new RepoError(`${bytes} bytes changed, at most ${this.repo.max_bytes}: nothing committed`);
     await this.git(["add", "--all", "--", "."]);
     const stat = await this.git(["diff", "--cached", "--numstat", "--no-renames", "-z", "HEAD"]);
     for (const entry of stat.split("\0")) {
-      const m = /^(\d+|-)\t(\d+|-)\t/.exec(entry);
+      const m = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(entry);
       if (!m) continue;
       out.changed++;
+      out.files.push(m[3]);
       out.insertions += m[1] === "-" ? 0 : Number(m[1]);
       out.deletions += m[2] === "-" ? 0 : Number(m[2]);
     }
+    out.files.sort();
     if (out.changed === 0) return { ...out, note: "nothing changed: no commit" };
     const { name, email } = this.repo.author;
     await this.git(["-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "--quiet", "--no-verify", "--file=-"], { input: message });
@@ -263,23 +271,4 @@ function openUp(dir: string, top = true): void {
     if (e.isDirectory()) openUp(p, false);
     else if (e.isFile()) fs.chmodSync(p, fs.statSync(p).mode & 0o111 ? 0o777 : 0o666);
   }
-}
-
-// openPR opens a pull request of head into base on the repository's server.
-async function openPR(repo: Repo, head: string, base: string, title: string, body: string, signal?: AbortSignal): Promise<string> {
-  const pr = repo.pr!;
-  const token = fs.readFileSync(pr.token_file, "utf8").trim();
-  const signals = [AbortSignal.timeout(30_000), ...(signal ? [signal] : [])];
-  const res = await fetch(`${pr.api}/repos/${pr.repo}/pulls`, {
-    method: "POST",
-    headers: { Authorization: `token ${token}`, "Content-Type": "application/json", Accept: "application/json" },
-    body: JSON.stringify({ head, base, title: title.slice(0, 255) || head, body }),
-    redirect: "error",
-    signal: AbortSignal.any(signals),
-  });
-  const text = await res.text();
-  if (res.status !== 201) throw new RepoError(`repository ${repo.name}: the pull request: ${res.status} ${text.slice(0, 300)}`);
-  const url = (JSON.parse(text) as { html_url?: string }).html_url;
-  if (!url) throw new RepoError(`repository ${repo.name}: the pull request has no URL`);
-  return url;
 }

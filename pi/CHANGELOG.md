@@ -4,6 +4,69 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.3.2] — 2026-10-25
+
+From gosidian's fitness pilot, second run (2026-10-25).
+
+### Changed
+- **The workspace says where the vault's notes go**: a step that writes
+  no file but has gosidian's MCP in writing is told that the notes the
+  task asks for go into the vault with its tools (`memory_create`,
+  `memory_update`, `memory_edit`), in a section `## gosidian`; with the
+  MCP in reading, that it cannot change them. Before, nothing said so.
+
+### Fixed
+- **A step that fails after the agent ran says what it spent**: the
+  error's structured content holds its `usage` (with `total_tokens`) and,
+  when known, its `cost`, so gosidian (2.117.0 and later) counts it in the
+  task and in the team's budget. A step stopped at `max_tokens` used to
+  cost nothing there; in the pilot two such steps spent 6.2 M tokens.
+
+## [0.3.1] — 2026-10-25
+
+The step's tokens: `max_tokens` counts the four kinds together, cache reads
+included, and an agent that reads long notes for 40 turns spends a few
+millions. In gosidian's fitness pilot the agents that read the WHO
+guidelines stopped at 300,000 in seven turns.
+
+### Changed
+- **The limits' token defaults**: 3,000,000 a step (was 300,000) and at
+  most 6,000,000 (was 2,000,000). A preset that sets them keeps its own;
+  `max_cost` stays the step's real bound.
+
+## [0.3.0] — 2026-10-24
+
+For gosidian's teams of agents: the run says which files a step changed,
+and a new node, `pr`, merges or closes the pull request a step opened. A
+preset of 0.2 works as it is; the manifest gains `pr` for a preset whose
+repositories have pull requests, and the run's `repo` the field `files`.
+
+### Added
+- **The node `pr`** (a preset with a repository that has `pr`): merges
+  (`action: merge`; `style` `merge`, `rebase` or `squash`, Gitea's `Do`;
+  `title` and `message` of the merge commit) or closes (`action: close`)
+  a pull request of a repository of the preset, named by its `number` or
+  its `url` (the run's `repo.pr_url`), with the preset's token, then
+  deletes its branch (`delete_branch`, true by default). Only a pull
+  request a step opened: of the repository itself (the URL of another
+  fails) and from a branch under the preset's prefix, checked before
+  anything changes; a protected branch is never deleted. A merge or a
+  close done already is no error, so a retry finds the pull request as it
+  is. Gitea's refusals (405, not mergeable; 409, a conflict) fail the node
+  with their status. Output: `repo`, `number`, `url`, `action`, `branch`,
+  `merged`, `closed`, `sha` (the merge commit), `branch_deleted`, `note`.
+  The node needs no files and no MCP, and the manifest's
+  `permissions.network` already lists the pull requests' API.
+- **The files a step changed**: the run's `repo.files`, the paths in the
+  repository of the files the commit added, modified or deleted (a
+  renamed file as its old path and its new one), sorted; empty when
+  nothing changed. `changed` stays their count.
+
+### Changed
+- A pull request that cannot reach Gitea (the network, the time limit)
+  fails the step with that reason, after the repository's name, instead
+  of an internal error.
+
 ## [0.2.1] — 2026-10-20
 
 A fix: a step's limits and the call's cancellation stop pi at once.

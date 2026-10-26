@@ -162,8 +162,10 @@ const presetSchema = {
   },
 };
 
-const DEFAULT_LIMITS: Limits = { max_turns: 30, max_seconds: 600, max_tokens: 300_000, max_cost: 1 };
-const MAX_LIMITS: Limits = { max_turns: 100, max_seconds: 840, max_tokens: 2_000_000, max_cost: 10 };
+// max_tokens counts the cache reads too: an agent that reads long notes for
+// 40 turns spends a few millions; max_cost stays the step's real bound.
+const DEFAULT_LIMITS: Limits = { max_turns: 30, max_seconds: 600, max_tokens: 3_000_000, max_cost: 1 };
+const MAX_LIMITS: Limits = { max_turns: 100, max_seconds: 840, max_tokens: 6_000_000, max_cost: 10 };
 
 // seconds reads a duration: a number of seconds, or "90s", "10m", "1h".
 export function seconds(v: unknown, what: string): number {
@@ -365,6 +367,7 @@ export const outputSchema = {
         branch: { type: "string" },
         commit: { type: "string" },
         changed: { type: "integer" },
+        files: { type: "array", items: { type: "string" }, description: "The paths in the repository of the files the commit changed, sorted: added, modified, deleted; a renamed one as its old path and its new one" },
         insertions: { type: "integer" },
         deletions: { type: "integer" },
         pushed: { type: "boolean" },

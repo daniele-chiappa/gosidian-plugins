@@ -5,8 +5,10 @@ that works in several turns with tools (read, grep, find, ls; bash, edit
 and write when its preset allows them) on the files a pipeline hands it,
 or on a repository of its preset, and answers with text or JSON, giving
 back the files it writes and committing what it changed. It may read and
-write the notes of the run's project through gosidian's MCP. For a task of
-one call, gosidian's `llm.chat` is simpler.
+write the notes of the run's project through gosidian's MCP. With
+repositories that have pull requests, a second node, `pr`, merges or
+closes the pull request a step opened. For a task of one call, gosidian's
+`llm.chat` is simpler.
 
 The node keeps `agent-run/1`, the contract of gosidian's agents
 (gosidian's `docs/plugins.md`, "Agent nodes"): the same settings and
@@ -103,7 +105,7 @@ plugin keeps what matters out of reach:
 ```yaml
 services:
   pi-openrouter:
-    image: ghcr.io/daniele-chiappa/gosidian-pi:0.2.1
+    image: ghcr.io/daniele-chiappa/gosidian-pi:0.3.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PI_OPENROUTER_TOKEN:?}
@@ -188,10 +190,12 @@ whoever runs the plugin. A change of the preset changes the manifest:
 for `permissions.mcp` with the preset's `mcp`, and lists the repositories'
 hosts in `permissions.network`.
 
-## The node
+## The nodes
 
-`<agent>.run`, for example `pi-openrouter.run`. It keeps `agent-run/1`,
-and adds settings of pi's own:
+### `<agent>.run`
+
+For example `pi-openrouter.run`. It keeps `agent-run/1`, and adds
+settings of pi's own:
 
 | Setting | Default | |
 |---|---|---|
@@ -228,7 +232,9 @@ hit `max_output`), `turns`, `usage` (`input`, `output`, `cache_read`,
 preset's prices) and `cost_source` (`agent`; `none` when the model has no
 prices), `tools` (calls by tool), `executor` (`plugin`, `version`, `agent`:
 `pi`, `agent_version`), with `repo` the repository's `name`, `base`,
-`branch`, `commit`, `changed`, `insertions`, `deletions`, `pushed`,
+`branch`, `commit`, `changed`, `files` (the paths of the files changed,
+sorted: added, modified, deleted, a renamed file as its old path and its
+new one; none when nothing changed), `insertions`, `deletions`, `pushed`,
 `pr_url` (and a `note`), with `mcp` its `level` and `url`, `skipped`, and
 from gosidian `files`. `usage.total_tokens` counts in the run's
 `max_llm_tokens`. `usage.cost` is deprecated: `cost`.
@@ -258,6 +264,43 @@ with `repo` the clone and the push:
   timeout: 14m
 ```
 
+### `<agent>.pr`
+
+Only with a repository that has `pr` in the preset. It merges or closes a
+pull request a step opened, with the preset's token, then deletes its
+branch: a pipeline, or the coordinator of a team of agents, takes the
+agent's work or drops it. Only a pull request of the repository itself
+(the URL of another fails), from a branch under the preset's prefix
+(`agent/`): any other fails the node before anything changes. It needs no
+files, no MCP and no slot.
+
+| Setting | Default | |
+|---|---|---|
+| `repo` | required | a repository of the preset with `pr` |
+| `number`, `url` | one of them | the pull request: its number, or its URL as `run` gives it (`repo.pr_url`) |
+| `action` | required | `merge` (into its base) or `close` (unmerged) |
+| `style` | `merge` | how a merge is made, Gitea's `Do`: `merge`, `rebase` or `squash` |
+| `delete_branch` | true | then delete the pull request's branch; never a protected one |
+| `title`, `message` | Gitea's | the merge commit's |
+
+Output: `repo`, `number`, `url`, `action`, `branch` (the pull request's),
+`merged`, `closed`, `sha` (the merge commit, when merged),
+`branch_deleted` (the branch is gone: deleted now, or before) and `note`
+(a merge or a close done already, a branch kept and why). A pull request
+merged or closed already is no error, so a retry finds it as it is.
+Gitea's refusals fail the node with their status: 405 (not mergeable, or
+not yet), 409 (a conflict with the base), 404. A branch Gitea does not
+delete leaves the merge or the close as it is, and `note` says why.
+
+```yaml
+- id: take
+  use: pi-openrouter.pr
+  with:
+    repo: app
+    url: "{{ fix.repo.pr_url }}"
+    action: merge
+```
+
 ## Environment
 
 | Variable | Default | |
@@ -274,7 +317,7 @@ with `repo` the clone and the push:
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.1 --build-context kit=agent-kit -t gosidian-pi:0.2.1 pi/
+docker build --build-arg VERSION=0.3.0 --build-context kit=agent-kit -t gosidian-pi:0.3.0 pi/
 pi/scripts/test.sh                # types and tests in node:24-alpine, with git
 pi/scripts/separation-test.sh     # the image as in production: users, secrets, links, leftovers, a repository, gosidian's MCP
 ```

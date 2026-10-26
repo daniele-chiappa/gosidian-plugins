@@ -6,6 +6,10 @@
 // of the plugin's.
 import fs from "node:fs";
 
+// RepoError is an error of a repository's (a clone, a commit, a pull
+// request): it fails the node with its message.
+export class RepoError extends Error {}
+
 export interface PullRequests {
   kind: "gitea";
   // api is the server's API, up to /api/v1; repo is owner/name.

@@ -28,6 +28,10 @@ type fakeGosidian struct {
 	inputs []map[string]any
 	status int // the answer's status; 0: 200
 	runOK  bool
+	// events is the body of a start that asks for them; empty: JSON, as
+	// a gosidian without streams.
+	events string
+	accept []string
 }
 
 func newFakeGosidian(t *testing.T) *fakeGosidian {
@@ -45,8 +49,14 @@ func newFakeGosidian(t *testing.T) *fakeGosidian {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		g.mu.Lock()
 		g.inputs = append(g.inputs, body.Input)
-		status, ok := g.status, g.runOK
+		g.accept = append(g.accept, r.Header.Get("Accept"))
+		status, ok, events := g.status, g.runOK, g.events
 		g.mu.Unlock()
+		if events != "" && status == 0 && strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, events)
+			return
+		}
 		if status != 0 {
 			w.WriteHeader(status)
 			_, _ = w.Write([]byte(`{"run":{"id":"r0","status":"running"}}`))
@@ -477,5 +487,101 @@ func TestNestedScopes(t *testing.T) {
 	_ = do(h, http.MethodPost, "/api/bots/docs/messages", `{"message":"y"}`, auth)
 	if s := g.last()["scopes"].([]any); len(s) != 2 || s[0] != "cucina" || s[1] != "attrezzi" {
 		t.Errorf("none chosen: %v", s)
+	}
+}
+
+// sseEvents reads a body of server-sent events: each event's name and
+// data, in order; comments are left out.
+func sseEvents(t *testing.T, body string) (names []string, data []map[string]any) {
+	t.Helper()
+	for _, block := range strings.Split(strings.TrimSpace(body), "\n\n") {
+		if strings.HasPrefix(block, ":") {
+			continue
+		}
+		name, raw, _ := strings.Cut(block, "\ndata: ")
+		var m map[string]any
+		if err := json.Unmarshal([]byte(raw), &m); err != nil {
+			t.Fatalf("event %q: %v", block, err)
+		}
+		names = append(names, strings.TrimPrefix(name, "event: "))
+		data = append(data, m)
+	}
+	return names, data
+}
+
+func streamOf(t *testing.T, h http.Handler, auth map[string]string, message string) (*httptest.ResponseRecorder, []string, []map[string]any) {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/bots/docs/messages", strings.NewReader(`{"message":"`+message+`"}`))
+	req.RemoteAddr = "192.0.2.10:5000"
+	for k, v := range auth {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	names, data := sseEvents(t, w.Body.String())
+	return w, names, data
+}
+
+// TestMessageStream: a widget that asks for events gets the text as
+// gosidian streams it, only the text, then the answer as the JSON has it;
+// a failure is an event too.
+func TestMessageStream(t *testing.T) {
+	_, g, h := newTestPlugin(t, nil)
+	auth := map[string]string{"Authorization": "Bearer " + userToken("mario", "docs", time.Now().Add(time.Hour))}
+	g.events = "event: run\ndata: {\"existing\":false,\"run\":{\"id\":\"r9\",\"status\":\"queued\"}}\n\n" +
+		"event: delta\ndata: {\"run\":\"c1\",\"pipeline\":\"p/pipelines/answer.md\",\"node\":\"llm\",\"text\":\"Prima\"}\n\n" +
+		": heartbeat\n\n" +
+		"event: reset\ndata: {\"run\":\"c1\",\"pipeline\":\"p/pipelines/answer.md\",\"node\":\"llm\"}\n\n" +
+		"event: delta\ndata: {\"run\":\"c1\",\"pipeline\":\"p/pipelines/answer.md\",\"node\":\"llm\",\"text\":\"Il forno\"}\n\n" +
+		"event: delta\ndata: {\"run\":\"c1\",\"pipeline\":\"p/pipelines/answer.md\",\"node\":\"llm\",\"text\":\" si accende\"}\n\n" +
+		"event: delta\ndata: {\"run\":\"c1\",\"pipeline\":\"p/pipelines/answer.md\",\"node\":\"other\",\"text\":\"Altro\"}\n\n" +
+		"event: answer\ndata: {\"existing\":false,\"status\":200,\"run\":{\"id\":\"r9\",\"status\":\"done\"},\"answer\":{\"text\":\"Il forno si accende così.\",\"sources\":[{\"n\":1,\"doc\":\"p/docs/Guida al forno.md\"}]}}\n\n"
+	w, names, data := streamOf(t, h, auth, "come si accende il forno?")
+	if w.Code != 200 || !strings.HasPrefix(w.Header().Get("Content-Type"), "text/event-stream") || w.Header().Get("X-Accel-Buffering") != "no" {
+		t.Fatalf("stream: %d %v", w.Code, w.Header())
+	}
+	want := []string{"delta", "reset", "delta", "delta", "reset", "delta", "answer"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("events %v, want %v", names, want)
+	}
+	if data[0]["text"] != "Prima" || data[2]["text"] != "Il forno" || data[5]["text"] != "Altro" || len(data[0]) != 1 {
+		t.Errorf("the text: %v", data)
+	}
+	last := data[len(data)-1]
+	ans := last["answer"].(map[string]any)
+	src := ans["sources"].([]any)[0].(map[string]any)
+	if last["session"] == "" || last["turn"] != "r9" || ans["text"] != "Il forno si accende così." || src["url"] == nil {
+		t.Errorf("the answer: %v", last)
+	}
+	if !strings.Contains(g.accept[len(g.accept)-1], "text/event-stream") {
+		t.Errorf("asked gosidian for %q", g.accept)
+	}
+	// The answer is in the conversation, as a JSON one is.
+	session := last["session"].(string)
+	r := do(h, http.MethodPost, "/api/bots/docs/messages", `{"message":"e poi?","session":"`+session+`"}`, auth)
+	if hist := g.last()["history"].([]any); r.code != 200 || len(hist) != 2 || hist[1].(map[string]any)["content"] != "Il forno si accende così." {
+		t.Errorf("history: %v", g.last()["history"])
+	}
+
+	// The time passed: an error event, as the JSON's 504.
+	g.events = "event: answer\ndata: {\"status\":202,\"run\":{\"id\":\"r10\",\"status\":\"running\"}}\n\n"
+	if _, names, data := streamOf(t, h, auth, "lenta"); len(names) != 1 || names[0] != "error" || data[0]["status"] != float64(504) {
+		t.Errorf("too long: %v %v", names, data)
+	}
+	// Events cut short: an error.
+	g.events = "event: delta\ndata: {\"run\":\"c1\",\"node\":\"llm\",\"text\":\"a metà\"}\n\n"
+	if _, names, data := streamOf(t, h, auth, "tagliata"); len(names) != 2 || names[1] != "error" || data[1]["status"] != float64(502) {
+		t.Errorf("cut: %v %v", names, data)
+	}
+	// gosidian refuses before the run: its status in the error event.
+	g.status = http.StatusTooManyRequests
+	if _, names, data := streamOf(t, h, auth, "troppe"); len(names) != 1 || names[0] != "error" || data[0]["status"] != float64(429) {
+		t.Errorf("busy: %v %v", names, data)
+	}
+	// A gosidian without streams answers JSON: the answer as an event.
+	g.status, g.events = 0, ""
+	if _, names, data := streamOf(t, h, auth, "vecchio"); len(names) != 1 || names[0] != "answer" || data[0]["answer"].(map[string]any)["text"] != "eco: vecchio" {
+		t.Errorf("JSON: %v %v", names, data)
 	}
 }

@@ -8,7 +8,7 @@ import { check, extractJSON } from "../src/schema.ts";
 import { loadPreset, nodeSchema, parsePreset, seconds } from "../src/preset.ts";
 import { LLMProxy } from "../src/proxy.ts";
 import { safeName } from "../src/files.ts";
-import { commitMessage, MCP_TOKEN_ENV, mcpConfig, mcpOf, piArgs, piEnv, settingsOf, StepError } from "../src/run.ts";
+import { commitMessage, MCP_TOKEN_ENV, mcpConfig, mcpOf, piArgs, piEnv, settingsOf, StepError, systemPrompt } from "../src/run.ts";
 import { manifest } from "../src/server.ts";
 import { mockLLM } from "./mock-llm.ts";
 import { preset } from "./helpers.ts";
@@ -199,10 +199,12 @@ test("agent-run/1: access gives the tools, tools narrow it, thinking is effort",
   assert.deepEqual(settingsOf(p, { prompt: "x", repo: { name: "app", branch: "agent/x" } }).repo, { name: "app", branch: "agent/x", push: true });
 });
 
-test("the manifest declares agent-run/1, gosidian's MCP and the repositories' hosts", () => {
+test("the manifest declares agent-run/1, gosidian's MCP and the repositories' hosts; pr for the repositories with pull requests", () => {
   const m: any = manifest(full());
+  assert.deepEqual(m.nodes.map((n: any) => n.name), ["run"], "no repository with pull requests: no pr");
   assert.equal(m.nodes[0].contract, "agent-run/1");
   assert.equal(m.nodes[0].mcp, true);
+  assert.equal(m.nodes[0].output_schema.properties.repo.properties.files.type, "array");
   assert.deepEqual(m.permissions.mcp, ["read", "write"]);
   assert.deepEqual(m.permissions.network, ["gosidian", "llm.example.com", "git.example.com", "git.other.example"]);
   const plain: any = manifest(preset("http://llm.test:8080/v1"));
@@ -210,6 +212,18 @@ test("the manifest declares agent-run/1, gosidian's MCP and the repositories' ho
   assert.equal(plain.nodes[0].mcp, undefined);
   assert.equal(plain.permissions.mcp, undefined);
   assert.deepEqual(plain.permissions.network, ["gosidian", "llm.test:8080"]);
+  const pulls: any = manifest(preset("http://llm.test:8080/v1", `repos:
+  - name: app
+    url: https://git.example.com/team/app.git
+    pr: {kind: gitea, api: "https://git.example.com/api/v1", repo: team/app, token_file: /run/secrets/gitea}
+  - name: docs
+    url: https://git.other.example/team/docs.git`));
+  assert.deepEqual(pulls.nodes.map((n: any) => [n.name, n.tool]), [["run", "run"], ["pr", "pr"]]);
+  for (const k of ["contract", "files", "file_refs", "mcp"]) assert.equal(pulls.nodes[1][k], undefined, k);
+  assert.deepEqual(pulls.nodes[1].input_schema.properties.repo.enum, ["app"]);
+  assert.deepEqual(pulls.nodes[1].input_schema.properties.action.enum, ["merge", "close"]);
+  assert.equal(pulls.nodes[1].output_schema.properties.branch_deleted.type, "boolean");
+  assert.deepEqual(pulls.permissions.network, ["gosidian", "llm.test:8080", "git.example.com", "git.other.example"]);
 });
 
 test("pi's arguments and environment: gosidian's MCP only when asked, its token never in the arguments", () => {
@@ -258,4 +272,15 @@ test("the commit message: the preset, the task's first line, the answer, gosidia
   assert.deepEqual(lines.slice(1), ["", "Fatto.", "", "gosidian: project demo, run r-42", ""]);
   const big = commitMessage(p, "x", "y".repeat(5000), undefined);
   assert.match(big, /^pi-test: x\n\ny{4000}\n\[…\]\n\ngosidian: project -, run -\n$/);
+});
+
+test("the system prompt: a step whose MCP writes is told that notes go into the vault with its tools", () => {
+  const p = preset("http://llm.test");
+  const s = settingsOf(p, { prompt: "x", access: "read" });
+  const w = systemPrompt(p, s, [], false, undefined, "write");
+  assert.match(w, /## gosidian\nThe MCP server gosidian \(tools mcp__gosidian__memory_\*\) reads and writes/);
+  assert.match(w, /memory_create, memory_update or memory_edit/);
+  assert.match(systemPrompt(p, s, [], false, undefined, "read"), /reads the vault of the run's project: you cannot change its notes/);
+  assert.doesNotMatch(systemPrompt(p, s, [], false), /## gosidian/);
+  assert.doesNotMatch(systemPrompt(p, s, [], false, undefined, "none"), /## gosidian/);
 });

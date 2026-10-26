@@ -431,6 +431,29 @@ class NativeTest(unittest.TestCase):
         self.assertRegex(got["markdown"], r"\| *Hopper *\| *Empty it before winter\. *\|")
         self.assertEqual([p["name"] for p in got["pictures"]], ["fig-1.png", "fig-2.png"])
 
+    def test_a_heading_deeper_than_markdown(self):
+        """A Word heading of level 8 (an introduction, styled so in some
+        manuals) is a heading of level 6 in the markdown, not a line of
+        ########."""
+        from docling.datamodel.base_models import InputFormat
+        from docling.document_converter import DocumentConverter
+
+        d = Document()
+        d.add_heading("Seed drill", level=1)
+        d.add_heading("Introduzione", level=8)
+        d.add_paragraph("Read this manual before use.")
+        d.add_heading("Safety", level=2)
+        buf = io.BytesIO()
+        d.save(buf)
+        with mock.patch.object(server, "SOFFICE", "/usr/bin/soffice"), \
+                mock.patch.object(server, "converter", lambda *a, **k: DocumentConverter(allowed_formats=[InputFormat.DOCX])):
+            r = asyncio.run(server.call_tool("convert", {"file": {"name": "drill.docx", "data": base64.b64encode(buf.getvalue()).decode()}}))
+        self.assertFalse(r.is_error, r.content)
+        md = r.structured_content["markdown"]
+        self.assertNotRegex(md, r"(?m)^#{7,}")
+        self.assertRegex(md, r"(?m)^###### Introduzione$")
+        self.assertRegex(md, r"(?m)^#+ Safety$")
+
 
 # The text inside a picture --------------------------------------------------
 

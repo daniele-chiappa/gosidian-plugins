@@ -328,7 +328,7 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
     const names = await fetchAll(refs, dirs.in, env.maxFilesBytes, signal);
     writeAgentDir(dirs.agent, env.proxy.url, grant.token, model, s, mcp);
     const sysFile = path.join(root, "system.md");
-    writeFile(sysFile, systemPrompt(p, s, names, wantJSON, ws));
+    writeFile(sysFile, systemPrompt(p, s, names, wantJSON, ws, mcp?.level));
     const base = piArgs(p, s, model, sysFile, dirs.session, Boolean(mcp));
     let usage: Usage = noUsage();
     let turns = 0;
@@ -346,11 +346,13 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
       usage = addUsage(usage, st.usage);
       turns += st.turns;
       for (const [k, n] of Object.entries(st.tools)) tools[k] = (tools[k] ?? 0) + n;
+      // What the step spent, when it fails after pi ran.
+      const spent = (): Record<string, unknown> => ({ usage: { ...usage, cost: Number(usage.cost.toFixed(6)) }, ...costOf(model, usage) });
       if (st.limit) {
-        throw new StepError(`the agent stopped at ${st.limit} (${limitText(st.limit, s)}) after ${turns} turns, ${usage.total_tokens} tokens, $${usage.cost.toFixed(4)}`);
+        throw new StepError(`the agent stopped at ${st.limit} (${limitText(st.limit, s)}) after ${turns} turns, ${usage.total_tokens} tokens, $${usage.cost.toFixed(4)}`, spent());
       }
       if (st.stop === "error" || st.stop === "aborted" || !st.settled) {
-        throw new StepError(`the agent failed: ${st.error || st.stderr || `pi ended (${st.exit})`}`);
+        throw new StepError(`the agent failed: ${st.error || st.stderr || `pi ended (${st.exit})`}`, spent());
       }
       const out: Record<string, unknown> = {
         text: st.text,
@@ -373,7 +375,7 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
             cont = true;
             continue;
           }
-          throw new StepError(`the answer is not the JSON asked for, after ${attempt + 1} tries: ${errors.join("; ")}; it began: ${st.text.slice(0, 300)}`);
+          throw new StepError(`the answer is not the JSON asked for, after ${attempt + 1} tries: ${errors.join("; ")}; it began: ${st.text.slice(0, 300)}`, spent());
         }
         out.json = (got as { value: unknown }).value;
       }
@@ -465,9 +467,12 @@ function writeAgentDir(dir: string, proxyURL: string, token: string, m: Model, s
 }
 
 // systemPrompt is what the step adds to pi's system prompt (or puts in its
-// place): the workspace, the repository, the preset's instructions, the
-// node's, and the JSON the answer must be.
-function systemPrompt(p: Preset, s: Settings, names: string[], json: boolean, repo?: Workspace): string {
+// place): the workspace, the repository, gosidian's MCP, the preset's
+// instructions, the node's, and the JSON the answer must be. A step whose
+// MCP writes is told that the notes it asks for go into the vault with its
+// tools: agents that wrote no file gave their notes back as text
+// (gosidian's fitness pilot, 2026-10-25).
+export function systemPrompt(p: Preset, s: Settings, names: string[], json: boolean, repo?: Workspace, mcp?: MCPLevel): string {
   const writes = s.tools.some((t) => ["edit", "write", "bash"].includes(t));
   const ws = [
     "## Workspace",
@@ -486,9 +491,15 @@ function systemPrompt(p: Preset, s: Settings, names: string[], json: boolean, re
         ...(s.tools.includes("bash") ? ["git log, git diff and git status work in repo/; its git folder is read-only."] : []),
       ].join("\n")
     : "";
+  const vault =
+    mcp === "write"
+      ? `## gosidian\nThe MCP server ${MCP_SERVER} (tools mcp__${MCP_SERVER}__memory_*) reads and writes the vault of the run's project. Read its notes with it, and write the notes the task asks for with memory_create, memory_update or memory_edit, in the folders the task allows: a note is not a file of your working folder, and an answer that holds it writes nothing.`
+      : mcp === "read"
+        ? `## gosidian\nThe MCP server ${MCP_SERVER} (tools mcp__${MCP_SERVER}__memory_*) reads the vault of the run's project: you cannot change its notes in this task.`
+        : "";
   const parts = s.system_mode === "replace"
-    ? [s.system ?? "", p.system, ws, rp]
-    : [ws, rp, p.system, s.system ?? ""];
+    ? [s.system ?? "", p.system, ws, rp, vault]
+    : [ws, rp, vault, p.system, s.system ?? ""];
   if (json) parts.push("## Answer\n" + instructions(s.schema));
   return parts.filter((x) => x.trim()).join("\n\n") + "\n";
 }

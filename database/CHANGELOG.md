@@ -4,6 +4,17 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.6.0] — 2026-10-22
+
+The preset from the environment, for gosidian's compose presets.
+
+### Added
+- **Variables in the preset**: `${NAME}` and `${NAME:-default}` are
+  filled from the environment before the preset is read, so `.env` sets
+  the endpoint, the models and their sizes. A `$` without braces stays as
+  written, and so does a comment line; an unset variable with no default
+  stops the plugin at start, naming it.
+
 ## [0.5.0] — 2026-10-16
 
 Rerankers: a search reads its first candidates again with a model that

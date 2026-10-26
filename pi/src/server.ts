@@ -3,16 +3,21 @@
 // gosidian's agents. One container is one agent: its preset names the
 // endpoint and its key, the models, the tools it may use, the limits of a
 // step, the repositories a step may work on and the access to gosidian's
-// MCP it may ask for. MCP at /mcp (Streamable HTTP, stateless), GET /health.
+// MCP it may ask for. With repositories that have pull requests, the node
+// pr merges or closes the one a step opened. MCP at /mcp (Streamable HTTP,
+// stateless), GET /health.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { Ajv } from "ajv";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { CONTRACT, META } from "./kit/contract.ts";
+import { RepoError } from "./kit/git.ts";
+import { prDescription, prOutput, prSchema, pullRequest, type PRRequest } from "./kit/pulls.ts";
 import { hostsOfPreset, loadPreset, nodeSchema, outputSchema, type Preset } from "./preset.ts";
 import { LLMProxy } from "./proxy.ts";
 import { PI_VERSION, runStep, StepError, VERSION, type Env } from "./run.ts";
@@ -52,9 +57,16 @@ export function manifest(p: Preset): Record<string, unknown> {
         input_schema: nodeSchema(p),
         output_schema: outputSchema,
       },
+      ...(hasPulls(p) ? [{ name: "pr", tool: "pr", description: prDescription, input_schema: prSchema(p.repos), output_schema: prOutput }] : []),
     ],
     permissions: { files: true, network: hostsOfPreset(p), ...(p.mcp.length ? { mcp: p.mcp } : {}) },
   };
+}
+
+// hasPulls says whether the preset has the node pr: a repository with pull
+// requests.
+function hasPulls(p: Preset): boolean {
+  return p.repos.some((r) => r.pr);
 }
 
 // Slots runs the steps a few at a time (PI_WORKERS), in arrival order.
@@ -114,6 +126,25 @@ export async function start(opts: { preset: Preset; token: string; port: number;
   const man = manifest(preset);
   const toolSchema: any = nodeSchema(preset);
   toolSchema.properties.files = {};
+  const ajv = new Ajv({ allErrors: true, useDefaults: true, strict: false });
+  const checkPR = hasPulls(preset) ? ajv.compile(prSchema(preset.repos)) : undefined;
+
+  // pr merges or closes a pull request a step opened: no slot, no agent.
+  const pr = async (args: Record<string, unknown>, signal: AbortSignal) => {
+    const t0 = Date.now();
+    try {
+      const s = structuredClone(args);
+      if (!checkPR!(s)) throw new StepError(ajv.errorsText(checkPR!.errors, { dataVar: "with" }));
+      const out = await pullRequest(preset.repos, s as unknown as PRRequest, signal);
+      log("pr done", { repo: out.repo, number: out.number, action: out.action, merged: out.merged, closed: out.closed, branch_deleted: out.branch_deleted });
+      return { structuredContent: out as unknown as Record<string, unknown>, content: [{ type: "text" as const, text: JSON.stringify(out) }] };
+    } catch (e) {
+      const known = e instanceof StepError || e instanceof RepoError;
+      const msg = (e as Error).message;
+      log(known ? "pr failed" : "pr error", { error: msg, seconds: (Date.now() - t0) / 1000 });
+      return { isError: true, content: [{ type: "text" as const, text: known ? msg : `internal error: ${msg}` }] };
+    }
+  };
 
   const mcp = () => {
     const s = new Server({ name: "gosidian-pi", version: VERSION }, { capabilities: { tools: {} } });
@@ -121,12 +152,14 @@ export async function start(opts: { preset: Preset; token: string; port: number;
       tools: [
         { name: "gosidian_manifest", description: "The plugin's manifest, for gosidian", inputSchema: { type: "object", properties: {} } },
         { name: "run", description: (man.nodes as any)[0].description, inputSchema: toolSchema },
+        ...(checkPR ? [{ name: "pr", description: prDescription, inputSchema: prSchema(preset.repos) as any }] : []),
       ],
     }));
     s.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
       if (req.params.name === "gosidian_manifest") {
         return { content: [{ type: "text", text: JSON.stringify(man) }], structuredContent: man };
       }
+      if (req.params.name === "pr" && checkPR) return pr((req.params.arguments ?? {}) as Record<string, unknown>, extra.signal);
       if (req.params.name !== "run") return { isError: true, content: [{ type: "text", text: `no tool ${req.params.name}` }] };
       const meta = (req.params._meta ?? {}) as Record<string, unknown>;
       const left = meta[META.tokensLeft];
@@ -156,7 +189,9 @@ export async function start(opts: { preset: Preset; token: string; port: number;
       } catch (e) {
         const msg = (e as Error).message;
         log(e instanceof StepError ? "step failed" : "step error", { error: msg, seconds: (Date.now() - t0) / 1000 });
-        return { isError: true, content: [{ type: "text", text: e instanceof StepError ? msg : `internal error: ${msg}` }] };
+        // A step that spent before it failed says what, for gosidian's count.
+        const spent = e instanceof StepError && e.spent ? { structuredContent: { error: msg, ...e.spent } } : {};
+        return { isError: true, ...spent, content: [{ type: "text", text: e instanceof StepError ? msg : `internal error: ${msg}` }] };
       } finally {
         release?.();
       }

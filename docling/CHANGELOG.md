@@ -4,6 +4,18 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.4] — 2026-10-26
+
+Headings deeper than markdown's six levels; nothing else changes for
+gosidian. The manifest is the same but for the version.
+
+### Fixed
+- **A Word heading of level 7 to 9** (an introduction or a table of
+  contents some manuals style so) came out as a line of eight to ten `#`,
+  which markdown does not read as a heading, nor gosidian's cut of the
+  notes into sections. It is now a heading of level 6 (`######`), in its
+  place among the others.
+
 ## [0.5.3] — 2026-10-17
 
 docling 2.133.0; nothing changes for gosidian. The manifest is the same

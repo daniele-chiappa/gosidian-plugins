@@ -1,7 +1,8 @@
 // The plugin as gosidian sees it: the bearer, the manifest (nodes for the
 // pipelines, tools with their access for the agents), run with the tokens
 // left in its _meta and a file given back as a resource, version, update
-// and usage; a preset with repositories and gosidian's MCP.
+// and usage; a preset with repositories and gosidian's MCP; pr on a fake
+// Gitea.
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -10,7 +11,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { mockAPI } from "./mock-api.ts";
-import { bareRepo, fake, FakeInstaller, FakeRegistry, git, mcpEndpoint, preset, TOKEN } from "./helpers.ts";
+import { bareRepo, fake, FakeInstaller, FakeRegistry, fakeGitea, git, mcpEndpoint, preset, TOKEN } from "./helpers.ts";
 import { parsePreset } from "../src/preset.ts";
 import { manifest, start } from "../src/server.ts";
 
@@ -213,6 +214,15 @@ mcp: [read]`);
   assert.deepEqual(man.nodes[0].input_schema.properties.mcp.enum, ["none", "read"]);
   assert.deepEqual(man.nodes[0].input_schema.properties.repo.properties.name.enum, ["app", "web"]);
   assert.ok(man.nodes[0].output_schema.properties.repo && man.nodes[0].output_schema.properties.mcp);
+  assert.equal(man.nodes[0].output_schema.properties.repo.properties.files.type, "array");
+  // pr, for the repositories with pull requests: no contract, no files, no MCP.
+  assert.deepEqual(man.nodes.map((n: any) => n.name), ["run", "version", "update", "usage", "pr"]);
+  assert.deepEqual(man.tools.map((n: any) => [n.name, n.access]).at(-1), ["pr", "write"]);
+  const prNode = man.nodes[4];
+  assert.equal(prNode.tool, "pr");
+  for (const k of ["contract", "files", "file_refs", "mcp"]) assert.equal(prNode[k], undefined, k);
+  assert.deepEqual(prNode.input_schema.properties.repo.enum, ["web"]);
+  assert.deepEqual(prNode.input_schema.required, ["repo", "action"]);
   const app = await start({
     preset: p,
     credentials: { anthropic: TOKEN },
@@ -252,5 +262,61 @@ mcp: [read]`);
     await mcp.close();
     fs.rmSync(runsDir, { recursive: true, force: true });
     fs.rmSync(versionsDir, { recursive: true, force: true });
+  }
+});
+
+test("pr: a step's pull request merged with the preset's token, its branch deleted; a refusal of Gitea's, or of the plugin's, fails the node", async () => {
+  const api = await mockAPI();
+  const gitea = await fakeGitea({ 7: "agent/r-9-0123456789abcdef", 8: "agent/r-9-fedcba9876543210", 9: "feature/x" });
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "claude-srv-"));
+  const tokenFile = path.join(dir, "gitea-token");
+  fs.writeFileSync(tokenFile, "gitea-test-token\n", { mode: 0o600 });
+  const logs: string[] = [];
+  const app = await start({
+    preset: preset(api.url, `repos:\n  - {name: app, url: "${bareRepo()}", pr: {kind: gitea, api: "${gitea.api}", repo: team/app, token_file: "${tokenFile}"}}`),
+    credentials: { anthropic: TOKEN },
+    token: "",
+    port: 0,
+    workers: 1,
+    versionsDir: dir,
+    installer: new FakeInstaller(),
+    registry: new FakeRegistry({ latest: "1.0.0" }),
+    env: { runsDir: dir, maxFilesBytes: 1 << 20, maxOutFiles: 5, maxOutBytes: 1 << 20, log: (m, f) => void logs.push(JSON.stringify({ m, ...f })) },
+  });
+  const url = `http://127.0.0.1:${(app.server.address() as any).port}`;
+  try {
+    const client = new Client({ name: "gosidian-test", version: "0" });
+    await client.connect(new StreamableHTTPClientTransport(new URL(url + "/mcp")));
+    assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ["gosidian_manifest", "run", "version", "update", "usage", "pr"]);
+    const res: any = await client.callTool({ name: "pr", arguments: { repo: "app", url: "https://git.example.com/team/app/pulls/7", action: "merge" } });
+    assert.ok(!res.isError, JSON.stringify(res.content));
+    assert.deepEqual(res.structuredContent, {
+      repo: "app", number: 7, url: "https://git.example.com/team/app/pulls/7", action: "merge", branch: "agent/r-9-0123456789abcdef",
+      merged: true, closed: true, sha: "c0ffee".padEnd(40, "0"), branch_deleted: true,
+    });
+    assert.deepEqual(gitea.seen, ["GET /pulls/7", 'POST /pulls/7/merge {"Do":"merge","delete_branch_after_merge":false}', "GET /pulls/7", "DELETE /branches/agent/r-9-0123456789abcdef"]);
+    assert.ok(gitea.auths.every((a) => a === "token gitea-test-token"));
+    gitea.merge = 409;
+    const conflict: any = await client.callTool({ name: "pr", arguments: { repo: "app", number: 8, action: "merge", style: "squash" } });
+    assert.ok(conflict.isError);
+    assert.equal(conflict.content[0].text, "repository app: pull request #8: the merge: 409 merge conflict");
+    const closed: any = await client.callTool({ name: "pr", arguments: { repo: "app", number: 8, action: "close", delete_branch: false } });
+    assert.deepEqual([closed.structuredContent.merged, closed.structuredContent.closed, closed.structuredContent.branch_deleted], [false, true, false]);
+    const foreign: any = await client.callTool({ name: "pr", arguments: { repo: "app", url: "https://git.example.com/team/other/pulls/7", action: "close" } });
+    assert.match(foreign.content[0].text, /is a pull request of team\/other, not of repository app/);
+    const notAStep: any = await client.callTool({ name: "pr", arguments: { repo: "app", number: 9, action: "close" } });
+    assert.match(notAStep.content[0].text, /its branch "feature\/x" is not under agent\//);
+    const noNumber: any = await client.callTool({ name: "pr", arguments: { repo: "app", action: "merge" } });
+    assert.ok(noNumber.isError);
+    assert.match(noNumber.content[0].text, /must match a schema in anyOf/);
+    assert.equal(gitea.seen.filter((s) => s.startsWith("DELETE")).length, 1, "only the merged one's branch");
+    await client.close();
+    assert.ok(logs.some((l) => l.includes('"m":"pr done"')));
+    for (const l of logs) assert.ok(!l.includes("gitea-test-token"));
+  } finally {
+    await app.close();
+    await api.close();
+    await gitea.close();
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 });

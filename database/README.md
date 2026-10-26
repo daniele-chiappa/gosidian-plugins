@@ -251,6 +251,14 @@ limits: {max_items: 500, max_list: 5000, max_text: 32768, max_k: 100, max_querie
          max_in: 1000, max_meta: 16384, max_update_keys: 64, max_graph: 5000, max_graph_k: 20, max_rerank: 200}
 ```
 
+**Variables.** A preset may name environment variables, `${NAME}` or
+`${NAME:-default}`, filled in before it is read: the compose presets of
+gosidian keep the endpoint and the models in their `.env` that way
+(`base_url: ${EMBED_URL}`, `dims: ${EMBED_DIMS:-768}`). Only the braced
+form counts, so a `$` in a prompt stays as written, and a comment line is
+left alone; a variable that is unset, with no default, stops the plugin at
+start with its name.
+
 **The limits** are the installer's to set. `max_items` chunks per write
 or get, `max_list` per page of `list`, `max_text` characters of a chunk,
 `max_k` results and `max_queries` texts per search; `max_result` bytes of

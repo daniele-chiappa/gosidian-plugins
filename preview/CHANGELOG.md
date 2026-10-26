@@ -4,6 +4,16 @@ The changes of the `preview` plugin, newest first. A tag
 `preview/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-preview:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.1.1] — 2026-10-25
+
+### Changed
+- **Playwright 1.64**: `playwright-core` 1.64.0 (was 1.61.0). A Playwright
+  server refuses a client of another minor version: the server must be
+  1.64.x (`npx playwright@1.64.0 run-server`, or the image
+  `mcr.microsoft.com/playwright:v1.64.0-noble`); one of 1.61 refuses this
+  plugin (`428 Precondition Required`), and 0.1.0 is refused by one of
+  1.64.
+
 ## [0.1.0] — 2026-10-20
 
 The first release: the static build of a branch, as exec zips

@@ -110,6 +110,14 @@ source with its `text`, the passage as the documentation has it, opens
 with a click, its own `images` in place. Any image opens large with a
 click; a click or Esc closes it.
 
+The answer shows as the model writes it: the widget asks for
+`text/event-stream`, and the text of the bot's pipeline (its `llm.chat`
+nodes with `stream: true`, gosidian 2.111 or later) fills the bubble
+until the answer, with its images and sources, takes its place. The
+lines that are only a mark in brackets (`[img:3]`) wait for the answer.
+An answer cut short (the connection lost, the time passed) keeps what
+arrived, grey, with the reason and «Riprova», which asks again.
+
 A flat list of scopes shows as boxes, several of which may be chosen.
 Nested scopes, which gosidian makes of a folder's tree (the note's
 `folders`), show as a select per level, named by `scope_labels`: the
@@ -125,7 +133,7 @@ the bot's note, with a token it signs for the reader in the fragment
 | Request | |
 |---|---|
 | `GET /api/bots/<bot>` | `title`, `welcome`, `scopes` (`name`, `label`, and `children` for nested ones), `scope_labels`, `max_message`, `handoff` (`label`, `contact`, or none), `dates` |
-| `POST /api/bots/<bot>/messages` | `{message, session, scopes, as_of}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, with an image's `[img:n]` lines; `sources`, each with its `url`, and its `text` and `images` to open it; `images`, each with its `url`, `title` and `n`; `more_images`; `non_so`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level; `as_of`, a day (YYYY-MM-DD), for a bot with `dates` |
+| `POST /api/bots/<bot>/messages` | `{message, session, scopes, as_of}` → `{session, turn, answer}`: the answer is the output of the bot's pipeline (`text`, with an image's `[img:n]` lines; `sources`, each with its `url`, and its `text` and `images` to open it; `images`, each with its `url`, `title` and `n`; `more_images`; `non_so`); `session` empty opens a conversation; `scopes` names scopes at any depth, none is those of the first level; `as_of`, a day (YYYY-MM-DD), for a bot with `dates`. With `Accept: text/event-stream`, events: `delta` (`{text}`, what the model wrote since the last one) and `reset` (`{}`: the text starts over), then `answer` (the JSON above) or `error` (`{status, error}`, the status a JSON answer would have had) |
 | `POST /api/bots/<bot>/handoff` | `{session, message, contact}` → `{session, answer}`: the bot's pipeline gets the conversation (`kind: handoff`) and hands it on; one a minute per conversation |
 | `GET /api/bots/<bot>/images/<id>` | an image of an answer, png, jpeg, gif or webp: its address is its key, without a token |
 | `POST /api/bots/<bot>/ratings` | `{session, turn, rating, comment}`: `turn` an answer of the conversation, `rating` from -10 to 10 |

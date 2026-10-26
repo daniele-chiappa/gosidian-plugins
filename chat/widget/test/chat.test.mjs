@@ -8,7 +8,7 @@ import vm from 'node:vm'
 const code = readFileSync(new URL('../dist/chat.js', import.meta.url), 'utf8')
 const window = {}
 vm.runInNewContext(code, { window, document: undefined, console })
-const { render, escapeHtml, groupSources, scopeLevels, figures, byNumber } = window.GosidianChat._internal
+const { render, escapeHtml, groupSources, scopeLevels, figures, byNumber, parseEvents, draft } = window.GosidianChat._internal
 
 test('escapes the markup of an answer', () => {
   assert.equal(escapeHtml(`<b a="1">'x'&</b>`), '&lt;b a=&quot;1&quot;&gt;&#39;x&#39;&amp;&lt;/b&gt;')
@@ -85,4 +85,20 @@ test('an image without a number keeps none, and the widget takes forty at most w
   const f = figures(Array.from({ length: 50 }, (_, i) => ({ n: i, url: `https://x/${i}` })), '', 40)
   assert.equal(f.length, 40)
   assert.equal(JSON.parse(JSON.stringify(figures([{ url: 'https://x/a' }])))[0].n, undefined)
+})
+
+test('the events of a stream, an event cut in two waits for its end', () => {
+  const plain = (v) => JSON.parse(JSON.stringify(v))
+  const a = parseEvents(': open\n\nevent: delta\ndata: {"text":"Ciao"}\n\nevent: delta\ndata: {"te')
+  assert.deepEqual(plain(a.events), [{ event: 'delta', data: '{"text":"Ciao"}' }])
+  const b = parseEvents(a.rest + 'xt":" mondo"}\r\n\nevent: answer\ndata: {"a":1}\ndata: {"b":2}\n\n')
+  assert.deepEqual(plain(b.events), [{ event: 'delta', data: '{"text":" mondo"}' }, { event: 'answer', data: '{"a":1}\n{"b":2}' }])
+  assert.equal(b.rest, '')
+})
+
+test('an answer as it comes: no lines of marks, no mark still open', () => {
+  assert.equal(draft('Apri il menu.\n\n[img:3]\n\nPoi salva [1'), 'Apri il menu.\n\n\nPoi salva ')
+  assert.equal(draft('Vedi [1] e [immagine 2]\n[immagine 4]'), 'Vedi [1] e [immagine 2]')
+  assert.equal(draft('Un [link](https://x'), 'Un [link](https://x')
+  assert.equal(draft('Testo intero.'), 'Testo intero.')
 })

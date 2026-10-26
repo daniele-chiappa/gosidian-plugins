@@ -1,0 +1,10 @@
+name: gosidian-plugins CodeQL
+# The plugins' tests and test scripts are not in their images: what CodeQL
+# finds there (fixtures, a separation harness that writes its test tokens
+# for the shell part) is noise. The plugins' code stays analysed as before.
+paths-ignore:
+  - "**/test/**"
+  - "**/scripts/**"
+  - "**/*.test.ts"
+  - "**/*_test.go"
+  - "**/test_*.py"

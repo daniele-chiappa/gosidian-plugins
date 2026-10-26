@@ -18,13 +18,20 @@ docker build --build-context kit=agent-kit -t gosidian-claude claude/
   limits, the pull requests (Gitea).
 - `git.ts`: the repository of a step. The plugin's server clones it on a
   branch of the step's own, the agent edits the files, the server commits
-  what changed, pushes the branch and opens the pull request. The agent
+  what changed (the output names the files), pushes the branch and opens
+  the pull request. The agent
   never holds the credentials, and the server runs nothing of the
   repository's: the git folder lies outside the work tree, readable by
   the agent and not writable; git runs without hooks, without the
   system's or a user's configuration, without filters; a hard link, a
   file that is not a plain one, or more files or bytes than the preset
   allows, commit nothing.
+- `pulls.ts`: the pull requests of a preset's repositories, on their
+  server's API (Gitea) with the plugin's token: a step opens one for its
+  branch, and the node `pr` merges or closes one a step opened, then
+  deletes its branch. `pr` acts only on a pull request of the repository
+  itself, from a branch under the preset's prefix, and never deletes a
+  protected branch.
 - `ssh.ts`: ssh from the server to a host of its preset: one key, the
   host keys pinned, no agent, no configuration of a file, no prompt; the
   repositories over SSH and the hosts of exec use it.

@@ -218,14 +218,52 @@ var (
 	pluginName     = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
 )
 
-// LoadConfig reads a preset and checks it.
+// presetVar is a variable a preset names: ${NAME}, or ${NAME:-default}.
+var presetVar = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(:-([^}]*))?\}`)
+
+// expandPreset fills the variables a preset names from the environment,
+// so that an install configured from a .env sets the endpoint and the
+// models there. Only the braced form counts, so a $ in
+// a prompt stays as written, and a comment line is left alone, so it may
+// show the syntax; a variable that is unset or empty takes its default,
+// and without one the preset is refused, naming it.
+func expandPreset(s string) (string, error) {
+	var missing []string
+	lines := strings.SplitAfter(s, "\n")
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		lines[i] = presetVar.ReplaceAllStringFunc(line, func(m string) string {
+			g := presetVar.FindStringSubmatch(m)
+			if v := os.Getenv(g[1]); v != "" {
+				return v
+			}
+			if g[2] != "" {
+				return g[3]
+			}
+			missing = append(missing, g[1])
+			return m
+		})
+	}
+	if len(missing) > 0 {
+		return "", fmt.Errorf("the preset names ${%s}, which is not set", strings.Join(missing, "}, ${"))
+	}
+	return strings.Join(lines, ""), nil
+}
+
+// LoadConfig reads a preset, fills its variables and checks it.
 func LoadConfig(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	text, err := expandPreset(string(b))
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
 	var c Config
-	dec := yaml.NewDecoder(strings.NewReader(string(b)))
+	dec := yaml.NewDecoder(strings.NewReader(text))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)

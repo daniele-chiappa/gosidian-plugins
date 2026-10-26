@@ -4,6 +4,25 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.5.0] — 2026-10-24
+
+The answer as it comes: with gosidian 2.111, the text of the bot's
+pipeline shows while the model writes it. With an older gosidian, or a
+pipeline without a streaming node, the answer comes whole as before. The
+manifest is the same but for the version.
+
+### Added
+- **Streaming**: `POST /api/bots/<bot>/messages` with `Accept:
+  text/event-stream` starts the pipeline asking gosidian for its events
+  and passes on `delta` and `reset` (only the text: no node nor run of the
+  pipeline), then `answer`, the JSON answer, or `error`, with the status
+  the JSON answer would have had. A new node writing starts the text over.
+  Without that `Accept` the answer is JSON, as before.
+- **The widget** asks for the stream and draws the text as it comes, once
+  a frame at most, without the lines that are only a mark in brackets
+  (`[img:3]`) nor a mark still open; the answer takes its place. An answer
+  cut short keeps what arrived, grey, with the reason and «Riprova».
+
 ## [0.4.1] — 2026-10-17
 
 The widget built with TypeScript 7; nothing changes for gosidian nor for a

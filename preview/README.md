@@ -299,10 +299,10 @@ network is gosidian and the Playwright server's host; a change of the
 preset (or of `PREVIEW_PLAYWRIGHT_WS`) changes the manifest: `gosidian
 plugin show`, then `gosidian plugin accept`.
 
-**Playwright's versions.** The client, `playwright-core`, is **1.61.0**,
+**Playwright's versions.** The client, `playwright-core`, is **1.64.0**,
 and a Playwright server refuses a client of another minor version: the
-server must be **1.61.x** (`npx playwright@1.61.0 run-server`, or the image
-`mcr.microsoft.com/playwright:v1.61.0-noble`). A new version of the plugin
+server must be **1.64.x** (`npx playwright@1.64.0 run-server`, or the image
+`mcr.microsoft.com/playwright:v1.64.0-noble`). A new version of the plugin
 that moves playwright-core says so in its changelog. The server reaches
 the plugin at `public_url`; the plugin reaches the server at
 `ws_endpoint`.
@@ -335,11 +335,11 @@ services:
   # A Playwright server of the same minor version: it must reach
   # PREVIEW_PUBLIC_URL, and the plugin must reach it.
   playwright:
-    image: mcr.microsoft.com/playwright:v1.61.0-noble
+    image: mcr.microsoft.com/playwright:v1.64.0-noble
     restart: unless-stopped
     init: true
     shm_size: 1g
-    command: ["npx", "-y", "playwright@1.61.0", "run-server", "--port", "3000", "--host", "0.0.0.0"]
+    command: ["npx", "-y", "playwright@1.64.0", "run-server", "--port", "3000", "--host", "0.0.0.0"]
     networks: [default]
 volumes:
   preview-store:
@@ -353,7 +353,7 @@ token_secret = "preview-token"
 ```
 
 A Playwright server that is already there (`playwright run-server`,
-1.61.x) does as well, when it reaches `PREVIEW_PUBLIC_URL`. The volume is the user node's (1000): a named volume
+1.64.x) does as well, when it reaches `PREVIEW_PUBLIC_URL`. The volume is the user node's (1000): a named volume
 takes it from the image; a folder of the host needs `chown 1000:1000`.
 
 ## Environment
@@ -372,7 +372,7 @@ takes it from the image; a folder of the host needs `chown 1000:1000`.
 
 ```bash
 docker build --build-arg VERSION=0.1.0 -t gosidian-preview:0.1.0 preview/
-preview/scripts/test.sh              # types and tests in node:24-alpine, beside a Playwright server 1.61.0
+preview/scripts/test.sh              # types and tests in node:24-alpine, beside a Playwright server 1.64.0
 preview/scripts/separation-test.sh   # the image as in production, two previews in Chromium, Firefox and WebKit
 ```
 

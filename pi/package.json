@@ -1,6 +1,6 @@
 {
   "name": "gosidian-pi",
-  "version": "0.2.1",
+  "version": "0.3.2",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin whose node runs a pi agent (pi.dev) on the files a pipeline hands it",

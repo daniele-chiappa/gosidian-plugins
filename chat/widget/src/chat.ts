@@ -189,6 +189,42 @@ function byNumber(list: Shown[]): Map<number, Shown> {
   return new Map(list.filter((f) => f.n !== undefined).map((f) => [f.n as number, f]))
 }
 
+/** The events of a text/event-stream read so far, and the start of the
+ *  next one, not yet whole. */
+function parseEvents(buf: string): { events: { event: string; data: string }[]; rest: string } {
+  const blocks = buf.split('\n\n')
+  const rest = blocks.pop() ?? ''
+  const events: { event: string; data: string }[] = []
+  for (const block of blocks) {
+    let event = 'message'
+    const data: string[] = []
+    for (const raw of block.split('\n')) {
+      const line = raw.replace(/\r$/, '')
+      if (line.startsWith(':')) continue
+      const i = line.indexOf(':')
+      const field = i < 0 ? line : line.slice(0, i)
+      const value = i < 0 ? '' : line.slice(i + 1).replace(/^ /, '')
+      if (field === 'event') event = value
+      else if (field === 'data') data.push(value)
+    }
+    if (data.length) events.push({ event, data: data.join('\n') })
+  }
+  return { events, rest }
+}
+
+/** An answer as it comes: without the lines that are only a mark in
+ *  brackets ([img:3], the pipeline's own), which the answer puts in their
+ *  places, nor a mark still open at its end. */
+function draft(text: string): string {
+  let t = text
+    .split('\n')
+    .filter((l) => !/^\s*\[[^\]\n]{1,60}\]?\s*$/.test(l))
+    .join('\n')
+  const open = t.lastIndexOf('[')
+  if (open >= 0 && t.indexOf(']', open) < 0 && t.length - open < 60) t = t.slice(0, open)
+  return t
+}
+
 /** The selects of nested scopes, given the names chosen so far: one per
  *  level, down the chosen ones while they have children. */
 function scopeLevels(scopes: ScopeInfo[], chosen: string[]): { options: ScopeInfo[]; value: string }[] {
@@ -258,6 +294,9 @@ img.zoom { cursor: zoom-in; }
 textarea { flex: 1; resize: none; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 8px; }
 .compose button { font: inherit; border: 0; border-radius: 6px; padding: 0 14px; background: var(--accent); color: #fff; cursor: pointer; }
 .compose button:disabled { opacity: .6; cursor: default; }
+.bot.cut { color: var(--muted); }
+.retry { align-self: flex-start; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); }
+.retry button { font: inherit; border: 1px solid var(--line); background: var(--bg); color: var(--accent); border-radius: 6px; padding: 2px 10px; cursor: pointer; }
 `
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string): HTMLElementTagNameMap[K] {
@@ -343,6 +382,47 @@ function mount(opts: ChatOptions): void {
     const body = await r.json().catch(() => ({}))
     if (!r.ok) throw new Error(body.error || `HTTP ${r.status}`)
     return body
+  }
+  // A POST that asks for the answer as it comes: onText gets each piece
+  // (delta) and a start over (reset); the answer comes back as call gives
+  // it, from a plugin that answers JSON too.
+  const stream = async (path: string, body: string, onText: (kind: 'delta' | 'reset', text: string) => void): Promise<any> => {
+    const r = await fetch(api + path, { method: 'POST', body, headers: { ...headers(), Accept: 'text/event-stream' } })
+    if (!(r.headers.get('Content-Type') || '').startsWith('text/event-stream') || !r.body) {
+      const b = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`)
+      return b
+    }
+    const reader = r.body.getReader()
+    const dec = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      let chunk: ReadableStreamReadResult<Uint8Array>
+      try {
+        chunk = await reader.read()
+      } catch {
+        break
+      }
+      if (chunk.done) break
+      const { events, rest } = parseEvents(buf + dec.decode(chunk.value, { stream: true }))
+      buf = rest
+      for (const ev of events) {
+        let data: any
+        try {
+          data = JSON.parse(ev.data)
+        } catch {
+          continue
+        }
+        if (ev.event === 'delta') onText('delta', String(data.text ?? ''))
+        else if (ev.event === 'reset') onText('reset', '')
+        else if (ev.event === 'answer' || ev.event === 'error') {
+          reader.cancel().catch(() => {})
+          if (ev.event === 'error') throw new Error(data.error || `HTTP ${data.status}`)
+          return data
+        }
+      }
+    }
+    throw new Error('Risposta interrotta: la connessione si è chiusa.')
   }
 
   // A flat list of scopes: boxes, several may be chosen. Nested ones
@@ -594,32 +674,80 @@ function mount(opts: ChatOptions): void {
     log.scrollTop = log.scrollHeight
   }
 
-  const submit = () => {
-    const message = input.value.trim()
+  // again: the message sent once more, after an answer cut short.
+  const submit = (again?: string) => {
+    const message = again ?? input.value.trim()
     if (!message || send.disabled) return
-    log.append(el('div', 'msg me', message))
-    input.value = ''
+    if (again === undefined) {
+      log.append(el('div', 'msg me', message))
+      input.value = ''
+    }
     send.disabled = true
     const waiting = el('div', 'msg note', '…')
     log.append(waiting)
     log.scrollTop = log.scrollHeight
-    call('/messages', { method: 'POST', body: JSON.stringify({ message, session, scopes: [...chosen], ...(asOf ? { as_of: asOf } : {}) }) })
+    // The text as it comes, drawn at most once a frame in a bubble of its
+    // own, which the answer takes the place of.
+    let box: HTMLDivElement | null = null
+    let text = ''
+    let frame = 0
+    const draw = () => {
+      frame = 0
+      const shown = draft(text)
+      if (!box) {
+        if (!shown.trim()) return
+        box = el('div', 'msg bot')
+        box.setAttribute('aria-busy', 'true')
+        waiting.replaceWith(box)
+      }
+      box.innerHTML = render(shown)
+      log.scrollTop = log.scrollHeight
+    }
+    const onText = (kind: 'delta' | 'reset', piece: string) => {
+      text = kind === 'reset' ? '' : text + piece
+      if (!frame) frame = requestAnimationFrame(draw)
+    }
+    const body = JSON.stringify({ message, session, scopes: [...chosen], ...(asOf ? { as_of: asOf } : {}) })
+    stream('/messages', body, onText)
       .then((r: { session: string; answer: Answer }) => {
         session = r.session
         storage()?.setItem(key, session)
+        cancelAnimationFrame(frame)
         waiting.remove()
+        box?.remove()
         answer(r.answer)
       })
       .catch((e: Error) => {
+        cancelAnimationFrame(frame)
+        if (frame || !box) draw()
         waiting.remove()
-        note(e.message)
+        const cut = box
+        if (!cut) {
+          note(e.message)
+          return
+        }
+        // What arrived stays, grey, with the reason and the way to ask again.
+        cut.classList.add('cut')
+        cut.removeAttribute('aria-busy')
+        const row = el('div', 'retry')
+        const retry = el('button', '', 'Riprova')
+        retry.type = 'button'
+        retry.onclick = () => {
+          if (send.disabled) return
+          cut.remove()
+          row.remove()
+          submit(message)
+        }
+        row.append(el('span', '', e.message), retry)
+        log.append(row)
+        log.scrollTop = log.scrollHeight
       })
       .finally(() => {
         send.disabled = false
         input.focus()
       })
   }
-  send.addEventListener('click', submit)
+  send.addEventListener('click', () => submit())
   input.addEventListener('keydown', (ev) => {
     if (ev.key === 'Enter' && !ev.shiftKey) {
       ev.preventDefault()
@@ -631,7 +759,7 @@ function mount(opts: ChatOptions): void {
 // The script mounts the chat its tag describes.
 ;(function auto() {
   const w = window as unknown as { GosidianChat?: unknown }
-  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources, scopeLevels, figures, byNumber } }
+  w.GosidianChat = { mount, _internal: { render, escapeHtml, groupSources, scopeLevels, figures, byNumber, parseEvents, draft } }
   const script = typeof document !== 'undefined' ? (document.currentScript as HTMLScriptElement | null) : null
   if (!script?.dataset.bot) return
   const container = document.getElementById(script.dataset.container || '')

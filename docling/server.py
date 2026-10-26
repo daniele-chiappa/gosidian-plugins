@@ -77,7 +77,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.5.3")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.5.4")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 MAX_BYTES = int(os.environ.get("DOCLING_MAX_BYTES", str(20 << 20)))
 MAX_REF_BYTES = int(os.environ.get("DOCLING_MAX_REF_BYTES", str(512 << 20)))
@@ -727,6 +727,27 @@ def picture_lines(item, doc) -> list[str]:
     return [md_line(b[4]) for b in order]
 
 
+# MAX_HEADING is the deepest heading level docling's markdown writes with
+# its own #s: the level plus one, after the title's #, so 5 is ######.
+MAX_HEADING = 5
+
+
+def flatten_deep_headings(doc) -> int:
+    """Brings the headings deeper than markdown's six levels up to the
+    sixth, and returns how many: a Word heading of level 7 to 9 (an
+    introduction, a table of contents styled so) came out as ########,
+    which markdown does not read as a heading, and the cut of the notes
+    neither. They stay headings, in their order."""
+    from docling_core.types.doc import SectionHeaderItem
+
+    n = 0
+    for item, _level in doc.iterate_items():
+        if isinstance(item, SectionHeaderItem) and item.level > MAX_HEADING:
+            item.level = MAX_HEADING
+            n += 1
+    return n
+
+
 def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, max_pages: int, scale: float, backend: str = "pypdfium", slides: dict | None = None, picture_text: bool = True) -> tuple[dict, list[tuple[str, bytes]]]:
     """Converts one document, its bytes or a file named as it: the structured
     result and the picture files. slides, for a pptx, holds slides_markdown's
@@ -744,6 +765,7 @@ def convert_sync(name: str, source, size_cap: int, ocr: bool, pictures: bool, ma
         errors = "; ".join(str(e.error_message) for e in (result.errors or [])) or result.status.name
         raise ConvertError(f"docling could not convert {name}: {errors}")
 
+    flatten_deep_headings(doc)
     title = None
     if slides is not None:
         md, title = slides_markdown(doc, raw, **slides)

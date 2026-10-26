@@ -245,10 +245,12 @@ export interface RepoInfo {
 }
 
 // systemPrompt is what a step adds to Claude Code's system prompt: the
-// workspace, the repository, the preset's instructions, the node's, and,
-// for json without a schema, the form of the answer (a schema has Claude
-// Code's own tool).
-export function systemPrompt(p: Preset, s: Settings, names: string[], repo?: RepoInfo): string {
+// workspace, the repository, gosidian's MCP, the preset's instructions, the
+// node's, and, for json without a schema, the form of the answer (a schema
+// has Claude Code's own tool). A step that writes no file but notes of the
+// vault is told so: "you cannot write files" alone made agents give their
+// notes back as text (gosidian's fitness pilot, 2026-10-25).
+export function systemPrompt(p: Preset, s: Settings, names: string[], repo?: RepoInfo, mcp?: MCPLevel): string {
   const writes = s.tools.some((t) => ["Write", "Edit", "NotebookEdit", "Bash"].includes(t));
   const ws = [
     "## Workspace",
@@ -257,7 +259,9 @@ export function systemPrompt(p: Preset, s: Settings, names: string[], repo?: Rep
       : "No files come with this task.",
     writes
       ? `Write the files you produce in the folder out/: they are handed back with your answer. Change nothing elsewhere${repo ? ", but in repo/" : ""}.`
-      : "You cannot write files in this task: answer with text.",
+      : mcp === "write"
+        ? "You cannot write files in this task: the notes it asks for go into gosidian's vault, with its tools (below)."
+        : "You cannot write files in this task: answer with text.",
   ].join("\n");
   const rp = repo
     ? [
@@ -269,8 +273,14 @@ export function systemPrompt(p: Preset, s: Settings, names: string[], repo?: Rep
         ...(s.tools.includes("Bash") ? ["git log, git diff and git status work in repo/; its git folder is read-only."] : []),
       ].join("\n")
     : "";
+  const vault =
+    mcp === "write"
+      ? `## gosidian\nThe MCP server ${MCP_SERVER} (tools mcp__${MCP_SERVER}__memory_*) reads and writes the vault of the run's project. Read its notes with it, and write the notes the task asks for with memory_create, memory_update or memory_edit, in the folders the task allows: a note is not a file of your working folder, and an answer that holds it writes nothing.`
+      : mcp === "read"
+        ? `## gosidian\nThe MCP server ${MCP_SERVER} (tools mcp__${MCP_SERVER}__memory_*) reads the vault of the run's project: you cannot change its notes in this task.`
+        : "";
   const answer = s.json && !s.schema ? "## Answer\nAnswer with a single JSON value and nothing else: no prose, no code fence." : "";
-  return [ws, rp, p.system, s.system ?? "", answer].filter((x) => x.trim()).join("\n\n") + "\n";
+  return [ws, rp, vault, p.system, s.system ?? "", answer].filter((x) => x.trim()).join("\n\n") + "\n";
 }
 
 // commitMessage is the commit of a step: the preset and the first line of
@@ -546,7 +556,7 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
       const ws = s.repo ? await openRepo(p, s.repo, dirs, meta, signal) : undefined;
       const names = await fetchAll(refs, dirs.in, env.maxFilesBytes, signal);
       const sysFile = path.join(dirs.root, "system.md");
-      fs.writeFileSync(sysFile, systemPrompt(p, s, names, ws && { name: ws.repo.name, branch: ws.branch, base: ws.base }));
+      fs.writeFileSync(sysFile, systemPrompt(p, s, names, ws && { name: ws.repo.name, branch: ws.branch, base: ws.base }, mcp?.level));
       fs.chmodSync(sysFile, 0o644);
       const run = await runClaude({
         bin,
@@ -560,12 +570,19 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
         maxTurns: s.max_turns,
         over: () => (used > budget ? "max_tokens" : prices && priceOf(tokens, prices) > s.max_cost ? "max_cost" : ""),
       });
+      // What the step spent, when it fails after Claude Code ran: the
+      // tokens, and the cost when Claude Code said it or the preset
+      // prices the model.
+      const spent = (o?: Outcome): Record<string, unknown> => ({
+        usage: { ...tokens, total_tokens: used },
+        ...(o && !t.compatible ? { cost: Number(o.cost.toFixed(6)), cost_source: "agent" } : prices ? { cost: Number(priceOf(tokens, prices).toFixed(6)), cost_source: "prices" } : {}),
+      });
       if (run.limit) {
-        throw new StepError(`Claude Code stopped at ${run.limit} (${limitText(run.limit, s, runCaps)}) after ${run.state.turns} turns, ${used} tokens`);
+        throw new StepError(`Claude Code stopped at ${run.limit} (${limitText(run.limit, s, runCaps)}) after ${run.state.turns} turns, ${used} tokens`, spent());
       }
       const o = run.state.outcome();
-      if (!o) throw new StepError(`Claude Code ended without a result (exit ${run.exit}): ${run.stderr || "no message"}`);
-      if (o.subtype !== "success" || o.isError) throw new StepError(failText(o, s));
+      if (!o) throw new StepError(`Claude Code ended without a result (exit ${run.exit}): ${run.stderr || "no message"}`, spent());
+      if (o.subtype !== "success" || o.isError) throw new StepError(failText(o, s), spent(o));
       const cost = !t.compatible ? { cost: o.cost, cost_source: "agent" } : prices ? { cost: priceOf(tokens, prices), cost_source: "prices" } : { cost: 0, cost_source: "none" };
       const out: Record<string, unknown> = {
         text: o.text,
@@ -585,13 +602,13 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
         claude_code: installed.version,
       };
       if (s.schema) {
-        if (o.structured === undefined) throw new StepError(`the answer did not follow the schema: Claude Code gave no structured output; it began: ${o.text.slice(0, 300)}`);
+        if (o.structured === undefined) throw new StepError(`the answer did not follow the schema: Claude Code gave no structured output; it began: ${o.text.slice(0, 300)}`, spent(o));
         const errors = check(s.schema, o.structured);
-        if (errors.length) throw new StepError(`the structured output does not follow the schema: ${errors.join("; ")}`);
+        if (errors.length) throw new StepError(`the structured output does not follow the schema: ${errors.join("; ")}`, spent(o));
         out.json = o.structured;
       } else if (s.json) {
         const got = extractJSON(o.text);
-        if (!got.ok) throw new StepError(`the answer is not JSON: ${got.error}; it began: ${o.text.slice(0, 300)}`);
+        if (!got.ok) throw new StepError(`the answer is not JSON: ${got.error}; it began: ${o.text.slice(0, 300)}`, spent(o));
         out.json = got.value;
       }
       if (mcp) {

@@ -1,6 +1,6 @@
 {
   "name": "gosidian-preview",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin that serves the static build of a branch at an address that expires, and tries it with a Playwright server",
@@ -16,7 +16,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.0",
     "ajv": "8.20.0",
-    "playwright-core": "1.61.0",
+    "playwright-core": "1.64.0",
     "yauzl": "3.4.0",
     "yaml": "2.9.1",
     "zod": "4.6.5"

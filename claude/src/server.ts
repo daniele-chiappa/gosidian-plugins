@@ -4,8 +4,9 @@
 // subscription's token or an API key, and others that speak the Messages
 // API: OpenRouter, Ollama, vLLM), the models on each, the effort levels,
 // the tools it may allow and the limits of a step. Claude Code is not in
-// the image: the plugin installs it from npm into its volume. MCP at /mcp
-// (Streamable HTTP, stateless), GET /health.
+// the image: the plugin installs it from npm into its volume. With
+// repositories that have pull requests, the node pr merges or closes the
+// one a step opened. MCP at /mcp (Streamable HTTP, stateless), GET /health.
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
@@ -20,6 +21,8 @@ import {
   type Preset,
 } from "./preset.ts";
 import { CONTRACT, META } from "./kit/contract.ts";
+import { RepoError } from "./kit/git.ts";
+import { prDescription, prOutput, prSchema, pullRequest, type PRRequest } from "./kit/pulls.ts";
 import { hostsOf } from "./kit/repos.ts";
 import { AnthropicProxy, upstreamsOf } from "./proxy.ts";
 import { ClaudeProber, runStep, StepError, VERSION, type Env } from "./run.ts";
@@ -93,6 +96,8 @@ export function operations(p: Preset): Operation[] {
       input: usageSchema,
       output: usageOutput,
     },
+    // pr only for a preset whose repositories have pull requests.
+    ...(p.repos.some((r) => r.pr) ? [{ name: "pr", access: "write" as const, description: prDescription, input: prSchema(p.repos), output: prOutput }] : []),
   ];
 }
 
@@ -316,6 +321,19 @@ export async function start(opts: StartOptions): Promise<App> {
       const info = await subscription!.read(s.max_age * 1000);
       return { output: { ...info, min_left_percent: preset.limits.min_left_percent, steps: steps.list(s.steps, s.since) } };
     },
+    pr: async (args, _meta, signal) => {
+      const o = ops.find((op) => op.name === "pr");
+      if (!o) throw new StepError("no tool pr: the preset has no repository with pull requests");
+      const s: PRRequest = check(o, args);
+      try {
+        const out = await pullRequest(preset.repos, s, signal);
+        elog("pr done", { repo: out.repo, number: out.number, action: out.action, merged: out.merged, closed: out.closed, branch_deleted: out.branch_deleted });
+        return { output: out };
+      } catch (e) {
+        if (e instanceof RepoError) throw new StepError(e.message);
+        throw e;
+      }
+    },
   };
 
   const mcp = () => {
@@ -350,7 +368,9 @@ export async function start(opts: StartOptions): Promise<App> {
       } catch (e) {
         const msg = (e as Error).message;
         elog(e instanceof StepError ? `${name} failed` : `${name} error`, { error: msg, seconds: (Date.now() - t0) / 1000 });
-        return { isError: true, content: [{ type: "text", text: e instanceof StepError ? msg : `internal error: ${msg}` }] };
+        // A step that spent before it failed says what, for gosidian's count.
+        const spent = e instanceof StepError && e.spent ? { structuredContent: { error: msg, ...e.spent } } : {};
+        return { isError: true, ...spent, content: [{ type: "text", text: e instanceof StepError ? msg : `internal error: ${msg}` }] };
       }
     });
     return s;

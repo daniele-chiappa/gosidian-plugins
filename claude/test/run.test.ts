@@ -152,7 +152,11 @@ test("the limits stop Claude Code: time, the run's tokens, cancel", async () => 
     await assert.rejects(runStep(env, { prompt: fake({}) }, 0, never), /no language-model tokens left/);
     assert.equal(api.requests.slice(before).filter((r) => r.path === "/v1/messages").length, 1);
     // The step's own max_tokens, under the run's.
-    await assert.rejects(runStep(env, { prompt: fake({ sleep: 2 }), max_tokens: 600 }, 50_000, never), /stopped at max_tokens \(600 tokens\)/);
+    // It says what it spent: gosidian counts it in the task and the budget.
+    await assert.rejects(runStep(env, { prompt: fake({ sleep: 2 }), max_tokens: 600 }, 50_000, never), (e: Error) => {
+      const usage = (e as StepError).spent?.usage as { total_tokens?: number } | undefined;
+      return e instanceof StepError && /stopped at max_tokens \(600 tokens\)/.test(e.message) && (usage?.total_tokens ?? 0) > 600;
+    });
   });
   await withStep(async ({ env }) => {
     const ac = new AbortController();
@@ -312,7 +316,7 @@ test("a repository: cloned on the step's branch, the agent's edits committed and
     const o: any = res.output;
     assert.match(o.repo.branch, /^agent\/r-7-[0-9a-f]{16}$/);
     assert.match(o.repo.commit, /^[0-9a-f]{40}$/);
-    assert.deepEqual(o.repo, { name: "app", base: "main", branch: o.repo.branch, commit: o.repo.commit, changed: 2, insertions: 2, deletions: 0, pushed: true });
+    assert.deepEqual(o.repo, { name: "app", base: "main", branch: o.repo.branch, commit: o.repo.commit, changed: 2, files: ["a.txt", "src/b.txt"], insertions: 2, deletions: 0, pushed: true });
     assert.deepEqual(branches(bare), [o.repo.branch, "main"].sort());
     assert.equal(git(bare, "rev-parse", o.repo.branch).trim(), o.repo.commit);
     assert.equal(git(bare, "rev-list", "--count", "main").trim(), "1", "main did not move");
@@ -338,6 +342,7 @@ test("a repository: a step that fails commits nothing; without a run, the branch
     const none: any = await runStep(env, { prompt: fake({}), repo: { name: "app" } }, undefined, never);
     assert.match(none.output.repo.branch, /^agent\/run-[0-9a-f]{16}$/);
     assert.equal(none.output.repo.commit, undefined);
+    assert.deepEqual(none.output.repo.files, []);
     assert.equal(none.output.repo.pushed, false);
     assert.match(none.output.repo.note, /nothing changed/);
     const ro = JSON.parse((await runStep(env, { prompt: fake({ env: true }), access: "read", repo: { name: "app" } }, undefined, never)).files[0].data.toString());
