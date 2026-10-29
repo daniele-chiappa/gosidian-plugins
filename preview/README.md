@@ -312,7 +312,7 @@ the plugin at `public_url`; the plugin reaches the server at
 ```yaml
 services:
   preview:
-    image: ghcr.io/daniele-chiappa/gosidian-preview:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-preview:0.1.2
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PREVIEW_TOKEN:?}
@@ -371,7 +371,7 @@ takes it from the image; a folder of the host needs `chown 1000:1000`.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.1.0 -t gosidian-preview:0.1.0 preview/
+docker build --build-arg VERSION=0.1.2 -t gosidian-preview:0.1.2 preview/
 preview/scripts/test.sh              # types and tests in node:24-alpine, beside a Playwright server 1.64.0
 preview/scripts/separation-test.sh   # the image as in production, two previews in Chromium, Firefox and WebKit
 ```

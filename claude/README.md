@@ -172,7 +172,7 @@ the server must refuse to commit.
 ```yaml
 services:
   claude:
-    image: ghcr.io/daniele-chiappa/gosidian-claude:0.3.0
+    image: ghcr.io/daniele-chiappa/gosidian-claude:0.3.3
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${CLAUDE_PLUGIN_TOKEN:?}
@@ -696,7 +696,7 @@ meanwhile waits for an install in progress, and fails with its reason.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.3.0 --build-context kit=agent-kit -t gosidian-claude:0.3.0 claude/
+docker build --build-arg VERSION=0.3.3 --build-context kit=agent-kit -t gosidian-claude:0.3.3 claude/
 claude/scripts/test.sh               # types and tests, in node:24-alpine
 claude/scripts/separation-test.sh    # the image as in production: users, secrets, links, leftovers
 TOKEN_FILE=… claude/scripts/smoke-test.sh   # the real Claude Code and API: install, probe, run, version, usage

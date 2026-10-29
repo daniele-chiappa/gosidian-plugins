@@ -453,7 +453,7 @@ show`, then `gosidian plugin accept`).
 ```yaml
 services:
   notify:
-    image: ghcr.io/daniele-chiappa/gosidian-notify:0.2.0
+    image: ghcr.io/daniele-chiappa/gosidian-notify:0.2.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${NOTIFY_TOKEN:?}
@@ -509,7 +509,7 @@ for `send` and `ask`).
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.0 -t gosidian-notify:0.2.0 notify/
+docker build --build-arg VERSION=0.2.1 -t gosidian-notify:0.2.1 notify/
 notify/scripts/test.sh              # types and tests in node:24-alpine, beside a real ntfy and a Mailpit
 notify/scripts/separation-test.sh   # the image as in production, on a network with no way out
 ```

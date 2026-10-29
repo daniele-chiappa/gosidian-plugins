@@ -113,7 +113,7 @@ for a Nextcloud folder or a Drive folder).
 ```yaml
 services:
   gosidian-storage:
-    image: ghcr.io/daniele-chiappa/gosidian-storage:0.2.2
+    image: ghcr.io/daniele-chiappa/gosidian-storage:0.2.3
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${STORAGE_TOKEN:?}
@@ -155,7 +155,7 @@ gosidian plugin bind storage nextcloud archive --as fatture --write --every 2m
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.2.2 -t gosidian-storage:0.2.2 storage/
+docker build --build-arg VERSION=0.2.3 -t gosidian-storage:0.2.3 storage/
 docker run --rm -v "$PWD/storage:/src" -w /src golang:1.27-alpine go test .   # WebDAV, S3 (gofakes3) and a local folder, in-process
 storage/scripts/nextcloud-test.sh                                            # against a disposable Nextcloud 34
 storage/scripts/s3-test.sh                                                   # against a disposable Garage 2.4 (S3)

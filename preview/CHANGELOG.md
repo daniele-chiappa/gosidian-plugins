@@ -4,6 +4,21 @@ The changes of the `preview` plugin, newest first. A tag
 `preview/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-preview:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.1.2] — 2026-10-29
+
+Dependency updates for two advisories; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **zod** 4.6.5 → 4.6.6 ([GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5),
+  high), through which the MCP SDK checks the tools' arguments.
+- **ip-address** 10.7.3 → 10.7.4 ([GHSA-rxp7-6hxx-x8q5](https://github.com/advisories/GHSA-rxp7-6hxx-x8q5)),
+  which the MCP SDK's express brings; the plugin's server, on `node:http`,
+  does not use it.
+
+### Changed
+- @modelcontextprotocol/sdk 1.32.1, @types/node 24.19.2.
+
 ## [0.1.1] — 2026-10-25
 
 ### Changed

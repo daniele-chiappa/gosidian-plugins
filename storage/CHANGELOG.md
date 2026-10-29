@@ -4,6 +4,19 @@ The changes of the `storage` plugin, newest first. A tag
 `storage/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-storage:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.3] — 2026-10-29
+
+Dependency updates for an advisory; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **chi** 5.3.1 → 5.4.0 ([GHSA-j6qf-3m9c-vwj3](https://github.com/advisories/GHSA-j6qf-3m9c-vwj3),
+  medium), which rclone's library brings; the plugin serves with mcp-go.
+
+### Changed
+- mcp-go 1.2.1, golang.org/x/net 0.61.0 (with x/crypto 0.58.0, x/sys
+  0.49.0, x/text 0.43.0).
+
 ## [0.2.2] — 2026-10-17
 
 Dependency updates; nothing changes for gosidian. The manifest is the same

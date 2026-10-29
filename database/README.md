@@ -407,7 +407,7 @@ CREATE ROLE "q_rag" LOGIN PASSWORD '…';
 ```yaml
 services:
   vec-pg:
-    image: ghcr.io/daniele-chiappa/gosidian-database:0.5.0
+    image: ghcr.io/daniele-chiappa/gosidian-database:0.6.1
     environment:
       DB_NAME: vec-pg                 # the name gosidian registers it with
       GOSIDIAN_PLUGIN_TOKEN: ${VEC_PG_TOKEN}

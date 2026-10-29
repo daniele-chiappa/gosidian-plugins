@@ -279,7 +279,7 @@ Open to the registries (a gate that runs `npm ci`, `go mod download`,
 ```yaml
 services:
   exec:
-    image: ghcr.io/daniele-chiappa/gosidian-exec:0.1.0
+    image: ghcr.io/daniele-chiappa/gosidian-exec:0.1.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${EXEC_TOKEN:?}
@@ -334,7 +334,7 @@ server's environment.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.1.0 --build-context kit=agent-kit -t gosidian-exec:0.1.0 exec/
+docker build --build-arg VERSION=0.1.1 --build-context kit=agent-kit -t gosidian-exec:0.1.1 exec/
 exec/scripts/test.sh              # types and tests in node:24-alpine, as a user of their own
 exec/scripts/separation-test.sh   # the image as in production: users, secrets, limits, toolchains, a repository, a host over SSH
 ```

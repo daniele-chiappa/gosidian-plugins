@@ -1,6 +1,6 @@
 {
   "name": "gosidian-pi",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "type": "module",
   "description": "A gosidian plugin whose node runs a pi agent (pi.dev) on the files a pipeline hands it",
@@ -23,5 +23,8 @@
   "devDependencies": {
     "@types/node": "24.19.2",
     "typescript": "7.0.2"
+  },
+  "overrides": {
+    "undici": "8.12.2"
   }
 }

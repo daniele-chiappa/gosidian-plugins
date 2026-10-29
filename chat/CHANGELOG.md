@@ -4,6 +4,14 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.5.1] — 2026-10-29
+
+A dependency update; nothing changes for gosidian. The manifest is the
+same but for the version.
+
+### Changed
+- mcp-go 1.2.1.
+
 ## [0.5.0] — 2026-10-24
 
 The answer as it comes: with gosidian 2.111, the text of the bot's

@@ -24,7 +24,7 @@ gosidian need not be on the internet: only the plugin is.
 ```yaml
 services:
   gosidian-chat:
-    image: ghcr.io/daniele-chiappa/gosidian-chat:0.4.1
+    image: ghcr.io/daniele-chiappa/gosidian-chat:0.5.1
     restart: unless-stopped
     read_only: true
     environment:

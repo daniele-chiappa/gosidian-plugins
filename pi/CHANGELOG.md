@@ -4,6 +4,22 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [0.3.4] — 2026-10-29
+
+undici 8.12.2 for three advisories; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **undici** 8.10.2 → 8.12.2, which pi installs as the process's `fetch`:
+  its calls to the model endpoint go through it.
+  [GHSA-xjj6-f33q-929c](https://github.com/advisories/GHSA-xjj6-f33q-929c)
+  (high: an answer with too many content encodings stopped the process),
+  [GHSA-4qv8-2p9j-2685](https://github.com/advisories/GHSA-4qv8-2p9j-2685)
+  (medium: the EventSource parser's memory) and
+  [GHSA-f72v-6w45-q472](https://github.com/advisories/GHSA-f72v-6w45-q472)
+  (medium: Subresource Integrity). pi 1.1.0 pins undici 8.10.2, so the
+  plugin's `package.json` overrides it.
+
 ## [0.3.3] — 2026-10-26
 
 pi 1.1.0, and dependency updates for an advisory; nothing changes for
