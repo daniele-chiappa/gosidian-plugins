@@ -3,7 +3,7 @@ module github.com/daniele-chiappa/gosidian-plugins/storage
 go 1.27.0
 
 require (
-	github.com/mark3labs/mcp-go v1.2.1
+	github.com/mark3labs/mcp-go v1.3.0
 	github.com/rclone/gofakes3 v0.0.10
 	github.com/rclone/rclone v1.75.1
 	go.yaml.in/yaml/v3 v3.0.5
