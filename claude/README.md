@@ -172,7 +172,7 @@ the server must refuse to commit.
 ```yaml
 services:
   claude:
-    image: ghcr.io/daniele-chiappa/gosidian-claude:0.3.3
+    image: ghcr.io/daniele-chiappa/gosidian-claude:0.4.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${CLAUDE_PLUGIN_TOKEN:?}
@@ -446,7 +446,7 @@ agent, and a few of its own.
 | `max_budget_usd` | | deprecated: `max_cost` |
 | `json` | false | the answer is a JSON value |
 | `schema` | | a JSON Schema the answer must follow (`--json-schema`) |
-| `repo` | | a repository of the preset (only with `repos`): `name`, `base` (the preset's), `branch` (`<prefix><run>-<step>`), `push` (true), `pr` (`true`, or `title` and `body`; a repository with `pr` in the preset) |
+| `repo` | | a repository of the preset (only with `repos`): `name`, `base` (the preset's), `branch` (`<prefix><run>-<step>`), `resume` (continue `branch`, which an earlier step pushed), `push` (true), `pr` (`true`, or `title` and `body`; a repository with `pr` in the preset) |
 | `mcp` | `none` | `read` or `write`, the preset's levels (only with `mcp`): gosidian's MCP for the step |
 
 With `repo`, the system prompt says where the repository is: in `repo/`,
@@ -479,7 +479,9 @@ Output:
   nothing changed, and `note` says so), `changed` (files), `files` (their
   paths in the repository, sorted: added, modified, deleted, a renamed
   file as its old path and its new one; none when nothing changed),
-  `insertions`, `deletions`, `pushed`, `pr_url`;
+  `insertions`, `deletions`, `pushed`, `resumed` (with `resume`, the
+  branch was there: the files and lines are then the branch's since
+  `base`), `pr_url`;
 - `mcp`, with `mcp`: `level`, `url` and `status` (gosidian's server as
   Claude Code found it at the start: `connected`, `failed`…); never the
   token;
@@ -696,7 +698,7 @@ meanwhile waits for an install in progress, and fails with its reason.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.3.3 --build-context kit=agent-kit -t gosidian-claude:0.3.3 claude/
+docker build --build-arg VERSION=0.4.0 --build-context kit=agent-kit -t gosidian-claude:0.4.0 claude/
 claude/scripts/test.sh               # types and tests, in node:24-alpine
 claude/scripts/separation-test.sh    # the image as in production: users, secrets, links, leftovers
 TOKEN_FILE=… claude/scripts/smoke-test.sh   # the real Claude Code and API: install, probe, run, version, usage

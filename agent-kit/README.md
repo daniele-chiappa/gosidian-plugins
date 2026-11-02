@@ -19,7 +19,9 @@ docker build --build-context kit=agent-kit -t gosidian-claude claude/
 - `git.ts`: the repository of a step. The plugin's server clones it on a
   branch of the step's own, the agent edits the files, the server commits
   what changed (the output names the files), pushes the branch and opens
-  the pull request. The agent
+  the pull request. With `resume`, a step continues the branch an earlier
+  one pushed (a task's attempt sent back), and its files are then the
+  branch's since base. The agent
   never holds the credentials, and the server runs nothing of the
   repository's: the git folder lies outside the work tree, readable by
   the agent and not writable; git runs without hooks, without the

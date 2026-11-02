@@ -130,6 +130,59 @@ test("files: the paths the commit changed, sorted; a renamed file is its old pat
   assert.deepEqual(git(bare, "-c", "core.quotePath=false", "show", "--name-only", "--no-renames", "--format=", "agent/r6-s1").trim().split("\n").sort(), out.files);
 });
 
+test("resume: a step continues the branch an earlier one pushed; its files are the branch's since base", async () => {
+  const bare = origin();
+  let s = step();
+  let w = await Workspace.open(repoOf(bare), { name: "app" }, { ...s, defaultBranch: "agent/t1-a" });
+  fs.appendFileSync(path.join(s.workTree, "a.txt"), "three\n");
+  const first = await w.finish("attempt 1");
+  assert.equal(first.resumed, undefined);
+  // main moves on meanwhile: its files are not the branch's.
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "other-"));
+  git(other, "clone", "--quiet", bare, "c");
+  fs.writeFileSync(path.join(other, "c", "m.txt"), "main\n");
+  git(path.join(other, "c"), "add", ".");
+  git(path.join(other, "c"), "commit", "--quiet", "-m", "main moves");
+  git(path.join(other, "c"), "push", "--quiet", "origin", "main");
+  s = step();
+  w = await Workspace.open(repoOf(bare), { name: "app", branch: "agent/t1-a", resume: true }, { ...s, defaultBranch: "agent/t1-b" });
+  assert.equal(w.resumed, true);
+  assert.equal(fs.readFileSync(path.join(s.workTree, "a.txt"), "utf8"), "one\ntwo\nthree\n", "the earlier step's work is there");
+  assert.equal(fs.existsSync(path.join(s.workTree, "m.txt")), false);
+  assert.equal(fs.statSync(path.join(s.workTree, "a.txt")).mode & 0o777, 0o666);
+  fs.writeFileSync(path.join(s.workTree, "b.txt"), "b\n");
+  const out = await w.finish("attempt 2");
+  assert.equal(out.resumed, true);
+  assert.equal(out.branch, "agent/t1-a");
+  assert.deepEqual(out.files, ["a.txt", "b.txt"]);
+  assert.equal(out.changed, 2);
+  assert.equal(out.insertions, 2);
+  assert.equal(out.pushed, true);
+  assert.equal(git(bare, "rev-parse", "agent/t1-a").trim(), out.commit);
+  assert.equal(git(bare, "rev-parse", "agent/t1-a^").trim(), first.commit, "the commit goes on top");
+  // Nothing new: no commit, and the branch stays as it was.
+  s = step();
+  w = await Workspace.open(repoOf(bare), { name: "app", branch: "agent/t1-a", resume: true }, { ...s, defaultBranch: "agent/t1-c" });
+  const none = await w.finish("attempt 3");
+  assert.equal(none.changed, 0);
+  assert.equal(none.pushed, false);
+  assert.match(none.note ?? "", /since the branch's last commit/);
+  assert.equal(git(bare, "rev-parse", "agent/t1-a").trim(), out.commit);
+});
+
+test("resume: a branch that is not there starts from base; resume names its branch", async () => {
+  const bare = origin();
+  const s = step();
+  const w = await Workspace.open(repoOf(bare), { name: "app", branch: "agent/gone", resume: true }, { ...s, defaultBranch: "agent/x" });
+  assert.equal(w.resumed, false);
+  fs.writeFileSync(path.join(s.workTree, "b.txt"), "b\n");
+  const out = await w.finish("fresh");
+  assert.equal(out.resumed, undefined);
+  assert.deepEqual(out.files, ["b.txt"]);
+  assert.equal(git(bare, "rev-parse", "agent/gone^").trim(), git(bare, "rev-parse", "main").trim());
+  await assert.rejects(Workspace.open(repoOf(bare), { name: "app", resume: true }, { ...step(), defaultBranch: "agent/y" }), /names none/);
+});
+
 test("branches: under the prefix, never base or a protected one", async () => {
   const bare = origin();
   const repo = repoOf(bare, { protected: ["release"] });

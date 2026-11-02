@@ -105,7 +105,7 @@ plugin keeps what matters out of reach:
 ```yaml
 services:
   pi-openrouter:
-    image: ghcr.io/daniele-chiappa/gosidian-pi:0.3.4
+    image: ghcr.io/daniele-chiappa/gosidian-pi:0.4.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PI_OPENROUTER_TOKEN:?}
@@ -214,7 +214,7 @@ settings of pi's own:
 | `schema` | | a JSON Schema the answer must follow |
 | `json_retries` | 1 | turns to fix an answer that does not hold |
 | `inline_files` | false | also put the text files in the prompt (256 KiB together at most): for a model that reads them badly with its tools |
-| `repo` | | a repository of the preset: `name`, `base` (default the preset's), `branch` (default `<prefix><run>-<step>`, under the preset's prefix), `push` (true), `pr` (`true`, or `title` and `body`) |
+| `repo` | | a repository of the preset: `name`, `base` (default the preset's), `branch` (default `<prefix><run>-<step>`, under the preset's prefix), `resume` (continue `branch`, which an earlier step pushed), `push` (true), `pr` (`true`, or `title` and `body`) |
 | `mcp` | `none` | gosidian's MCP for the call: `read` or `write`, as the preset allows |
 | `thinking` | | deprecated: `effort` |
 
@@ -234,8 +234,9 @@ prices), `tools` (calls by tool), `executor` (`plugin`, `version`, `agent`:
 `pi`, `agent_version`), with `repo` the repository's `name`, `base`,
 `branch`, `commit`, `changed`, `files` (the paths of the files changed,
 sorted: added, modified, deleted, a renamed file as its old path and its
-new one; none when nothing changed), `insertions`, `deletions`, `pushed`,
-`pr_url` (and a `note`), with `mcp` its `level` and `url`, `skipped`, and
+new one; none when nothing changed; with `resume`, when the branch was
+there, the branch's since `base`), `insertions`, `deletions`, `pushed`,
+`resumed`, `pr_url` (and a `note`), with `mcp` its `level` and `url`, `skipped`, and
 from gosidian `files`. `usage.total_tokens` counts in the run's
 `max_llm_tokens`. `usage.cost` is deprecated: `cost`.
 
@@ -317,7 +318,7 @@ delete leaves the merge or the close as it is, and `note` says why.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.3.4 --build-context kit=agent-kit -t gosidian-pi:0.3.4 pi/
+docker build --build-arg VERSION=0.4.0 --build-context kit=agent-kit -t gosidian-pi:0.4.0 pi/
 pi/scripts/test.sh                # types and tests in node:24-alpine, with git
 pi/scripts/separation-test.sh     # the image as in production: users, secrets, links, leftovers, a repository, gosidian's MCP
 ```

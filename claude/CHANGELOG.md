@@ -4,6 +4,26 @@ The changes of the `claude` plugin, newest first. A tag `claude/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-claude:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.4.0] — 2026-10-29
+
+For gosidian's teams of agents: a step may continue the branch
+of an earlier one, so that a task's attempt sent back starts from the work
+it did. A preset of 0.3 works as it is; the node's `repo` gains `resume`,
+and the run's `repo` the field `resumed`.
+
+### Added
+- **`resume`** in the node's `repo`: the step continues `branch`, which an
+  earlier step pushed. The work tree has its files as that step left
+  them, the commit goes on top of its commits, and the push stays a
+  fast-forward; `files`, `insertions` and `deletions` are then the
+  branch's since `base`, the earlier steps' with this one's, which a pull
+  request shows. A branch that is not there any more starts from `base`,
+  as without `resume`, and the agent is told so. The output's
+  `repo.resumed` says which.
+- The system prompt of a resumed step says that the branch holds an
+  earlier attempt's work, and to fix what went wrong rather than start
+  again.
+
 ## [0.3.3] — 2026-10-29
 
 Dependency updates for two advisories; nothing changes for gosidian. The

@@ -485,6 +485,11 @@ export function systemPrompt(p: Preset, s: Settings, names: string[], json: bool
     ? [
         "## Repository",
         `The repository ${repo.repo.name} is checked out in the folder repo/ of your working directory, on the branch ${repo.branch}, from ${repo.base}. The folders in/ and out/ are not part of it, and keep their meaning.`,
+        ...(repo.resumed
+          ? [`The branch holds the work of an earlier attempt at this task: its files are as that attempt left them, and your changes go on top of its commits. Fix what went wrong rather than start again.`]
+          : repo.req.resume
+            ? [`An earlier attempt's branch ${repo.branch} is not in the repository any more: you start from ${repo.base}.`]
+            : []),
         writes
           ? "Make your changes to its files there. Do not commit, push or change branches: when the task ends, the plugin commits what you changed."
           : "Read its files there: you cannot change them in this task.",

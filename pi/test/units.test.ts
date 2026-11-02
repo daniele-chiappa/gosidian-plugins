@@ -8,6 +8,7 @@ import { check, extractJSON } from "../src/schema.ts";
 import { loadPreset, nodeSchema, parsePreset, seconds } from "../src/preset.ts";
 import { LLMProxy } from "../src/proxy.ts";
 import { safeName } from "../src/files.ts";
+import type { Workspace } from "../src/kit/git.ts";
 import { commitMessage, MCP_TOKEN_ENV, mcpConfig, mcpOf, piArgs, piEnv, settingsOf, StepError, systemPrompt } from "../src/run.ts";
 import { manifest } from "../src/server.ts";
 import { mockLLM } from "./mock-llm.ts";
@@ -272,6 +273,18 @@ test("the commit message: the preset, the task's first line, the answer, gosidia
   assert.deepEqual(lines.slice(1), ["", "Fatto.", "", "gosidian: project demo, run r-42", ""]);
   const big = commitMessage(p, "x", "y".repeat(5000), undefined);
   assert.match(big, /^pi-test: x\n\ny{4000}\n\[…\]\n\ngosidian: project -, run -\n$/);
+});
+
+test("the system prompt: a resumed step is told its branch holds an earlier attempt's work", () => {
+  const p = preset("http://llm.test");
+  const s = settingsOf(p, { prompt: "x", access: "edit" });
+  const ws = (resume: boolean, resumed: boolean) =>
+    ({ repo: { name: "app" }, branch: "agent/r1-s1", base: "main", req: { name: "app", resume }, resumed }) as unknown as Workspace;
+  const fresh = systemPrompt(p, s, [], false, ws(false, false));
+  assert.match(fresh, /on the branch agent\/r1-s1, from main/);
+  assert.doesNotMatch(fresh, /earlier attempt/);
+  assert.match(systemPrompt(p, s, [], false, ws(true, true)), /The branch holds the work of an earlier attempt at this task/);
+  assert.match(systemPrompt(p, s, [], false, ws(true, false)), /An earlier attempt's branch agent\/r1-s1 is not in the repository any more: you start from main\./);
 });
 
 test("the system prompt: a step whose MCP writes is told that notes go into the vault with its tools", () => {

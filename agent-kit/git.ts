@@ -19,6 +19,10 @@ export interface RepoRequest {
   name: string;
   base?: string;
   branch?: string;
+  // resume continues branch, which an earlier step pushed (a task's
+  // attempt sent back): the work tree has its files, and the commit goes on
+  // top. A branch that is not there starts from base, as without it.
+  resume?: boolean;
   push?: boolean;
   pr?: boolean | { title?: string; body?: string };
 }
@@ -37,6 +41,10 @@ export interface RepoOutput {
   insertions: number;
   deletions: number;
   pushed: boolean;
+  // resumed: the step continued its branch (resume), which was there; its
+  // files, insertions and deletions are then the branch's since base, the
+  // earlier steps' with this one's.
+  resumed?: boolean;
   pr_url?: string;
   note?: string;
 }
@@ -68,6 +76,10 @@ export function repoSettingSchema(repos: Repo[]): Record<string, unknown> {
       name: { enum: repos.map((r) => r.name) },
       base: { type: "string", description: "The branch to start from; default the preset's" },
       branch: { type: "string", description: "The branch to commit on, under the preset's prefix; default <prefix><run>-<step>" },
+      resume: {
+        type: "boolean",
+        description: "Continue branch, which an earlier step pushed: the work tree has its files and the commit goes on top; the output's files are then the branch's since base. A branch that is not there starts from base (resumed false)",
+      },
       push: { type: "boolean", default: true },
       pr: {
         description: "Open a pull request (a repository with pr in the preset)",
@@ -86,6 +98,8 @@ export class Workspace {
   readonly workTree: string;
   // readOnly: a checkout (checkout), whose changes are never committed.
   readonly readOnly: boolean;
+  // resumed: open continued the branch, which was there (resume).
+  resumed = false;
   private readonly env: NodeJS.ProcessEnv;
   private readonly signal?: AbortSignal;
 
@@ -123,9 +137,17 @@ export class Workspace {
     await w.checkRef(branch, "branch");
     if (!branch.startsWith(repo.branch_prefix)) throw new RepoError(`branch ${branch}: a step commits under ${repo.branch_prefix}`);
     if (repo.protected.includes(branch)) throw new RepoError(`branch ${branch} is protected: a step never commits on it`);
+    if (req.resume && !req.branch) throw new RepoError("resume continues a branch: the request names none (branch)");
     const depth = repo.depth > 0 ? [`--depth=${repo.depth}`] : [];
     await w.git(["clone", "--quiet", "--no-checkout", "--single-branch", `--branch=${base}`, `--separate-git-dir=${w.gitDir}`, ...depth, "--", repo.url, w.workTree], { bare: true });
-    await w.git(["checkout", "--quiet", "-b", branch]);
+    const remote = `refs/remotes/origin/${branch}`;
+    if (req.resume && (await w.git(["ls-remote", "--heads", "origin", `refs/heads/${branch}`])).trim()) {
+      await w.git(["fetch", "--quiet", ...depth, "origin", `+refs/heads/${branch}:${remote}`]);
+      await w.git(["checkout", "--quiet", "-b", branch, remote]);
+      w.resumed = true;
+    } else {
+      await w.git(["checkout", "--quiet", "-b", branch]);
+    }
     openUp(w.workTree);
     return w;
   }
@@ -174,25 +196,28 @@ export class Workspace {
   // pushes the branch and opens the pull request, as the request says.
   async finish(message: string): Promise<RepoOutput> {
     if (this.readOnly) throw new RepoError(`repository ${this.repo.name} is a checkout: nothing is committed`);
-    const out: RepoOutput = { name: this.repo.name, base: this.base, branch: this.branch, changed: 0, files: [], insertions: 0, deletions: 0, pushed: false };
+    const out: RepoOutput = { name: this.repo.name, base: this.base, branch: this.branch, changed: 0, files: [], insertions: 0, deletions: 0, pushed: false, ...(this.resumed ? { resumed: true } : {}) };
     const { files, bytes } = await this.scan();
     if (files > this.repo.max_files) throw new RepoError(`${files} files changed, at most ${this.repo.max_files}: nothing committed`);
     if (bytes > this.repo.max_bytes) throw new RepoError(`${bytes} bytes changed, at most ${this.repo.max_bytes}: nothing committed`);
     await this.git(["add", "--all", "--", "."]);
-    const stat = await this.git(["diff", "--cached", "--numstat", "--no-renames", "-z", "HEAD"]);
-    for (const entry of stat.split("\0")) {
-      const m = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(entry);
-      if (!m) continue;
-      out.changed++;
-      out.files.push(m[3]);
-      out.insertions += m[1] === "-" ? 0 : Number(m[1]);
-      out.deletions += m[2] === "-" ? 0 : Number(m[2]);
-    }
-    out.files.sort();
-    if (out.changed === 0) return { ...out, note: "nothing changed: no commit" };
+    Object.assign(out, numstat(await this.git(["diff", "--cached", "--numstat", "--no-renames", "-z", "HEAD"])));
+    if (out.changed === 0) return { ...out, note: this.resumed ? "nothing changed since the branch's last commit: no commit" : "nothing changed: no commit" };
     const { name, email } = this.repo.author;
     await this.git(["-c", `user.name=${name}`, "-c", `user.email=${email}`, "commit", "--quiet", "--no-verify", "--file=-"], { input: message });
     out.commit = (await this.git(["rev-parse", "HEAD"])).trim();
+    if (this.resumed) {
+      // The branch's files since base, which a pull request shows: the
+      // earlier steps' too. A shallow clone may not reach where it left
+      // base: then this commit's alone.
+      let since = "";
+      try {
+        since = (await this.git(["merge-base", `refs/remotes/origin/${this.base}`, "HEAD"])).trim();
+      } catch {
+        out.note = "the branch's start is beyond the clone's depth: the files are this commit's";
+      }
+      if (since) Object.assign(out, numstat(await this.git(["diff", "--numstat", "--no-renames", "-z", since, "HEAD"])));
+    }
     if (this.req.push === false) return out;
     await this.git(["push", "--porcelain", "origin", `HEAD:refs/heads/${this.branch}`]);
     out.pushed = true;
@@ -252,6 +277,22 @@ export class Workspace {
       throw new RepoError(`repository ${this.repo.name}: ${redact((err as Error).message)}`);
     }
   }
+}
+
+// numstat reads git diff --numstat -z: the files, sorted, and the lines
+// added and deleted (none for a binary file).
+function numstat(stat: string): Pick<RepoOutput, "changed" | "files" | "insertions" | "deletions"> {
+  const out = { changed: 0, files: [] as string[], insertions: 0, deletions: 0 };
+  for (const entry of stat.split("\0")) {
+    const m = /^(\d+|-)\t(\d+|-)\t(.+)$/s.exec(entry);
+    if (!m) continue;
+    out.changed++;
+    out.files.push(m[3]);
+    out.insertions += m[1] === "-" ? 0 : Number(m[1]);
+    out.deletions += m[2] === "-" ? 0 : Number(m[2]);
+  }
+  out.files.sort();
+  return out;
 }
 
 // redact hides the credentials a URL may carry (https://user:token@host)

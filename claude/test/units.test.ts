@@ -330,6 +330,17 @@ test("the system prompt: the workspace, the preset's, the node's", () => {
   assert.doesNotMatch(systemPrompt(p, settingsOf(p, { prompt: "x", json: true, schema: { type: "object" } }), []), /## Answer/);
 });
 
+test("the system prompt: a resumed step is told its branch holds an earlier attempt's work", () => {
+  const p = preset("http://api.test");
+  const s = settingsOf(p, { prompt: "x", tools: ["Write"] });
+  const repo = { name: "app", branch: "agent/r1-s1", base: "main" };
+  const fresh = systemPrompt(p, s, [], repo);
+  assert.match(fresh, /on the branch agent\/r1-s1, from main/);
+  assert.doesNotMatch(fresh, /earlier attempt/);
+  assert.match(systemPrompt(p, s, [], { ...repo, resume: true, resumed: true }), /The branch holds the work of an earlier attempt at this task: its files are as that attempt left them/);
+  assert.match(systemPrompt(p, s, [], { ...repo, resume: true, resumed: false }), /An earlier attempt's branch agent\/r1-s1 is not in the repository any more: you start from main\./);
+});
+
 test("the system prompt: a step that writes notes of the vault, not files, is told so", () => {
   const p = preset("http://api.test");
   const s = settingsOf(p, { prompt: "x" });

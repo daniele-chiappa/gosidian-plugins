@@ -242,6 +242,9 @@ export interface RepoInfo {
   name: string;
   branch: string;
   base: string;
+  // resume: the node asked to continue the branch; resumed: it was there.
+  resume?: boolean;
+  resumed?: boolean;
 }
 
 // systemPrompt is what a step adds to Claude Code's system prompt: the
@@ -267,6 +270,11 @@ export function systemPrompt(p: Preset, s: Settings, names: string[], repo?: Rep
     ? [
         "## Repository",
         `The repository ${repo.name} is checked out in the folder repo/ of your working directory, on the branch ${repo.branch}, from ${repo.base}. The folders in/ and out/ are not part of it: they are as above.`,
+        ...(repo.resumed
+          ? [`The branch holds the work of an earlier attempt at this task: its files are as that attempt left them, and your changes go on top of its commits. Fix what went wrong rather than start again.`]
+          : repo.resume
+            ? [`An earlier attempt's branch ${repo.branch} is not in the repository any more: you start from ${repo.base}.`]
+            : []),
         writes
           ? "Make your changes to its files there. Do not commit, push or change branches: when the task ends, the plugin commits what you changed."
           : "Read its files there: you cannot change them in this task.",
@@ -556,7 +564,7 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
       const ws = s.repo ? await openRepo(p, s.repo, dirs, meta, signal) : undefined;
       const names = await fetchAll(refs, dirs.in, env.maxFilesBytes, signal);
       const sysFile = path.join(dirs.root, "system.md");
-      fs.writeFileSync(sysFile, systemPrompt(p, s, names, ws && { name: ws.repo.name, branch: ws.branch, base: ws.base }, mcp?.level));
+      fs.writeFileSync(sysFile, systemPrompt(p, s, names, ws && { name: ws.repo.name, branch: ws.branch, base: ws.base, resume: ws.req.resume, resumed: ws.resumed }, mcp?.level));
       fs.chmodSync(sysFile, 0o644);
       const run = await runClaude({
         bin,
