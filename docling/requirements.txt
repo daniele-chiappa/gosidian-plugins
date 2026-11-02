@@ -1,5 +1,5 @@
 # torch and torchvision come from the CPU index first (Dockerfile).
-docling==2.138.0
+docling==2.140.0
 # Pillow 13 for its advisories (critical and high, in the decoders a
 # document's pictures go through), with the first docling-core, docling-parse
 # and docling-ibm-models that allow it; docling 2.138 does not, so
