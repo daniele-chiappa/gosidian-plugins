@@ -6,7 +6,7 @@ require (
 	github.com/mark3labs/mcp-go v1.3.0
 	github.com/rclone/gofakes3 v0.0.10
 	github.com/rclone/rclone v1.75.1
-	go.yaml.in/yaml/v3 v3.0.5
+	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/net v0.61.0
 	google.golang.org/api v0.300.0
 )
