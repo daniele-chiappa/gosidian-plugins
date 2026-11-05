@@ -4,6 +4,15 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.6.2] — 2026-11-05
+
+A dependency update; nothing changes for gosidian. The manifest is the
+same but for the version.
+
+### Changed
+- mcp-go 1.3.0: fixes to how tools' arguments and results are decoded
+  and paged.
+
 ## [0.6.1] — 2026-10-29
 
 A dependency update; nothing changes for gosidian. The manifest is the

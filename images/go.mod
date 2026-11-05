@@ -3,7 +3,7 @@ module github.com/daniele-chiappa/gosidian-plugins/images
 go 1.27.0
 
 require (
-	github.com/mark3labs/mcp-go v1.2.1
+	github.com/mark3labs/mcp-go v1.3.0
 	golang.org/x/image v0.47.0
 )
 

@@ -105,7 +105,7 @@ plugin keeps what matters out of reach:
 ```yaml
 services:
   pi-openrouter:
-    image: ghcr.io/daniele-chiappa/gosidian-pi:0.4.0
+    image: ghcr.io/daniele-chiappa/gosidian-pi:0.4.1
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PI_OPENROUTER_TOKEN:?}
@@ -318,7 +318,7 @@ delete leaves the merge or the close as it is, and `note` says why.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.4.0 --build-context kit=agent-kit -t gosidian-pi:0.4.0 pi/
+docker build --build-arg VERSION=0.4.1 --build-context kit=agent-kit -t gosidian-pi:0.4.1 pi/
 pi/scripts/test.sh                # types and tests in node:24-alpine, with git
 pi/scripts/separation-test.sh     # the image as in production: users, secrets, links, leftovers, a repository, gosidian's MCP
 ```

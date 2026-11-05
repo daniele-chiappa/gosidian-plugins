@@ -4,6 +4,15 @@ The changes of the `storage` plugin, newest first. A tag
 `storage/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-storage:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.4] — 2026-11-05
+
+A dependency update; nothing changes for gosidian. The manifest is the
+same but for the version.
+
+### Changed
+- mcp-go 1.3.0: fixes to how tools' arguments and results are decoded
+  and paged.
+
 ## [0.2.3] — 2026-10-29
 
 Dependency updates for an advisory; nothing changes for gosidian. The

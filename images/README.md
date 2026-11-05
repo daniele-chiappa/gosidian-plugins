@@ -68,7 +68,7 @@ original: see gosidian's `docs/pipelines.md`.
 ```yaml
 services:
   gosidian-images:
-    image: ghcr.io/daniele-chiappa/gosidian-images:0.2.1
+    image: ghcr.io/daniele-chiappa/gosidian-images:0.2.2
     read_only: true
     tmpfs: [/tmp]
     environment:

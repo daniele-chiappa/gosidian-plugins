@@ -4,6 +4,23 @@ The changes of the `preview` plugin, newest first. A tag
 `preview/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-preview:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.1.3] — 2026-11-05
+
+Dependency updates for six advisories; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **body-parser** 2.3.0 → 2.4.0 ([GHSA-27r3-jxmh-p828](https://github.com/advisories/GHSA-27r3-jxmh-p828), high) and
+  **qs** 6.16.0 → 6.16.1 ([GHSA-6pq8-jhm2-2vcw](https://github.com/advisories/GHSA-6pq8-jhm2-2vcw)), which the MCP
+  SDK's express brings; the plugin's server, on `node:http`, does not use
+  them.
+- **fast-uri** 3.1.8 → 3.1.9 ([GHSA-w74x-v6f9-j3xg](https://github.com/advisories/GHSA-w74x-v6f9-j3xg),
+  [GHSA-wjr9-j795-jxcr](https://github.com/advisories/GHSA-wjr9-j795-jxcr), medium; [GHSA-xhq7-xmqj-769h](https://github.com/advisories/GHSA-xhq7-xmqj-769h),
+  [GHSA-333x-w4r6-6crp](https://github.com/advisories/GHSA-333x-w4r6-6crp), low), which ajv brings with the MCP SDK.
+
+### Changed
+- zod 4.6.7.
+
 ## [0.1.2] — 2026-10-29
 
 Dependency updates for two advisories; nothing changes for gosidian. The
