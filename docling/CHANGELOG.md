@@ -4,6 +4,31 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.6] — 2026-11-09
+
+Fixes for the advisories of what the image holds; nothing changes for
+gosidian. The manifest is the same but for the version.
+
+### Security
+- **certifi** 2026.7.22 → 2026.10.23, without the `emSign ECC Root CA - G3`
+  of eight intermediate CAs whose keys were compromised
+  ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)):
+  the plugin trusts this bundle when it downloads a document over HTTPS.
+- **pip** 25.0.1 → 26.2.1, **setuptools** 78.1.0 → 84.0.0, with the
+  `jaraco.context` it carries, and **wheel** 0.45.1 → 0.48.0, which the
+  image had from Python and torch. Their advisories are about installing
+  packages, which the plugin does not do once built. Python's own copy of
+  pip 25.0.1 for new virtual environments (`ensurepip`) is gone: the
+  plugin makes none.
+- Debian's security fixes the base image did not have yet (zlib), with an
+  `apt-get upgrade` in the build.
+
+### Changed
+- torch's dependencies as PyTorch's index has them now: filelock 4.2.4,
+  which also fixes
+  [GHSA-v4x8-3wr5-3wq8](https://github.com/advisories/GHSA-v4x8-3wr5-3wq8),
+  fsspec 2026.9.0, networkx 3.7 and numpy 2.5.4.
+
 ## [0.5.5] — 2026-10-26
 
 Pillow 13 for its advisories, and docling 2.138.0: Arabic read from a PDF

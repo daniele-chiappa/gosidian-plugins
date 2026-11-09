@@ -7,17 +7,25 @@ ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONUNBUFFERED=1
 
+# Debian's security fixes the base image does not have yet (zlib).
+RUN apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/*
+
 # The packages resolve as PyPI stood on PYPI_BEFORE: the same build every
 # time, and no package younger than two weeks at release.
 ARG PYPI_BEFORE=2026-10-12T07:00:00Z
 # Packages taken newer than PYPI_BEFORE, each as PyPI stood just after its
-# release: Pillow 13 for its advisories.
-ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z"
+# release: Pillow 13 and certifi for their advisories. Python's own copy of
+# pip for new virtual environments goes: the plugin makes none, and its pip
+# is an old one.
+ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z certifi=2026-10-23T11:45:00Z"
 COPY requirements.txt /app/requirements.txt
 RUN pip install uv==0.12.19 \
  && uv pip install --system --exclude-newer "${PYPI_BEFORE}" \
       $(for p in ${PYPI_NEWER}; do printf -- '--exclude-newer-package %s ' "$p"; done) -r /app/requirements.txt \
- && pip uninstall -y uv
+ && pip uninstall -y uv \
+ && rm -f /usr/local/lib/python3.12/ensurepip/_bundled/pip-*.whl
 
 # The licenses of what the image holds (THIRD_PARTY_NOTICES.md).
 COPY licenses/ THIRD_PARTY_NOTICES.md /licenses/

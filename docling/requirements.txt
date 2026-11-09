@@ -9,6 +9,14 @@ pillow==13.0.0
 docling-core==2.104.0
 docling-parse==7.22.4
 docling-ibm-models==4.0.4
+# certifi without the emSign root of the compromised intermediate CAs
+# (newer than PYPI_BEFORE: PYPI_NEWER in the Dockerfile); pip, setuptools
+# and wheel, which the image has from Python and torch, past their
+# advisories.
+certifi==2026.10.23
+pip==26.2.1
+setuptools==84.0.0
+wheel==0.48.0
 mcp==2.3.0
 # Used by the server itself: mcp 2 no longer brings httpx.
 httpx==0.28.1

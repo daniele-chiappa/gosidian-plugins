@@ -4,6 +4,18 @@ The changes of the `chat` plugin, newest first. A tag `chat/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-chat:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.5.3] — 2026-11-09
+
+A dependency update for two advisories; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **golang.org/x/text** 0.14.0 → 0.43.0: an invalid input could make its
+  normalization loop forever
+  ([GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970)), and a crafted one
+  make `secure/precis` panic
+  ([GO-2026-6629](https://pkg.go.dev/vuln/GO-2026-6629)).
+
 ## [0.5.2] — 2026-11-05
 
 A dependency update; nothing changes for gosidian. The manifest is the

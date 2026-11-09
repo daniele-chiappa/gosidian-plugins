@@ -4,6 +4,24 @@ The changes of the `ocr` plugin, newest first. A tag `ocr/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-ocr:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.1.2] — 2026-11-09
+
+Fixes for the advisories of what the image holds; nothing changes for
+gosidian. The manifest is the same but for the version.
+
+### Security
+- **certifi** 2026.7.22 → 2026.10.23, without the `emSign ECC Root CA - G3`
+  of eight intermediate CAs whose keys were compromised
+  ([GHSA-6q48-6c7w-9gw2](https://github.com/advisories/GHSA-6q48-6c7w-9gw2)):
+  the plugin trusts this bundle when it downloads a document, or talks to
+  the model's server, over HTTPS.
+- **pip** 25.0.1 → 26.2.1, which the image had from Python: its advisory
+  is about installing packages, which the plugin does not do once built.
+  Python's own copy of pip 25.0.1 for new virtual environments
+  (`ensurepip`) is gone: the plugin makes none.
+- Debian's security fixes the base image did not have yet (zlib), with an
+  `apt-get upgrade` in the build.
+
 ## [0.1.1] — 2026-10-26
 
 Pillow 13, for the advisories of its 12.3.0 that reach a plugin opening

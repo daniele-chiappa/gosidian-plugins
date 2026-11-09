@@ -17,9 +17,11 @@ ENV PIP_NO_CACHE_DIR=1 \
 # and Korean (about 170 MB more): without them a page through PDF shows
 # empty boxes, which the OCR and the pictures see. DejaVu draws Latin,
 # Greek, Cyrillic, Arabic and Hebrew; the build fails if a script of these
-# has no font.
+# has no font. The upgrade takes Debian's security fixes the base image
+# does not have yet (zlib).
 RUN echo "deb http://deb.debian.org/debian trixie-backports main" > /etc/apt/sources.list.d/backports.list \
  && apt-get update \
+ && apt-get upgrade -y --no-install-recommends \
  && apt-get install -y --no-install-recommends libglib2.0-0 libgl1 fonts-dejavu-core fonts-liberation2 fonts-noto-cjk \
  && apt-get install -y --no-install-recommends -t trixie-backports \
       libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui \
@@ -35,8 +37,9 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 t
 # docling 2.130 two days after it came out).
 ARG PYPI_BEFORE=2026-10-12T07:00:00Z
 # Packages taken newer than PYPI_BEFORE, each as PyPI stood just after its
-# release: Pillow 13 for its advisories, and the docling packages that allow it.
-ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z doclang=2026-10-15T14:55:00Z docling-core=2026-10-22T14:05:00Z docling-parse=2026-10-21T12:02:00Z docling-ibm-models=2026-10-21T11:36:00Z"
+# release: Pillow 13 and certifi for their advisories, and the docling
+# packages that allow Pillow 13.
+ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z certifi=2026-10-23T11:45:00Z doclang=2026-10-15T14:55:00Z docling-core=2026-10-22T14:05:00Z docling-parse=2026-10-21T12:02:00Z docling-ibm-models=2026-10-21T11:36:00Z"
 COPY requirements.txt overrides.txt /app/
 RUN pip install uv==0.12.19 \
  && uv pip install --system --exclude-newer "${PYPI_BEFORE}" \
@@ -50,9 +53,11 @@ RUN docling-tools models download -o /models/docling layout tableformer picture_
 
 # The licenses of what the image holds (THIRD_PARTY_NOTICES.md), and each
 # model's beside it: a model folder renamed by docling fails the build, and
-# the notices are checked again.
+# the notices are checked again. Python's own copy of pip for new virtual
+# environments goes: the plugin makes none, and its pip is an old one.
 COPY licenses/ THIRD_PARTY_NOTICES.md /licenses/
-RUN cd /models/docling \
+RUN rm -f /usr/local/lib/python3.12/ensurepip/_bundled/pip-*.whl \
+ && cd /models/docling \
  && cp /licenses/CDLA-Permissive-2.0.txt docling-project--docling-models/LICENSE \
  && cp /licenses/Apache-2.0.txt docling-project--docling-layout-heron/LICENSE \
  && cp /licenses/Apache-2.0.txt docling-project--docling-layout-heron-onnx/LICENSE \

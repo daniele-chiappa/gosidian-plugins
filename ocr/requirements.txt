@@ -1,5 +1,10 @@
 # The client of the OCR model: layout, then each block's content (Apache-2.0).
 mineru-vl-utils==2.0.7
+# certifi without the emSign root of the compromised intermediate CAs
+# (newer than PYPI_BEFORE: PYPI_NEWER in the Dockerfile), and pip, which
+# the image has from Python, past its advisory.
+certifi==2026.10.23
+pip==26.2.1
 mcp==2.3.0
 httpx==0.28.1
 jsonschema==4.26.0

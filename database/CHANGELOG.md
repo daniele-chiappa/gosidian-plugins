@@ -4,6 +4,20 @@ The changes of the `database` plugin, newest first. A tag
 `database/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-database:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.6.3] — 2026-11-09
+
+A dependency update for two advisories; nothing changes for gosidian. The
+manifest is the same but for the version.
+
+### Security
+- **golang.org/x/text** 0.29.0 → 0.43.0, with golang.org/x/sync 0.24.0:
+  an invalid input could make its normalization loop forever
+  ([GO-2026-5970](https://pkg.go.dev/vuln/GO-2026-5970)), and a crafted one
+  make `secure/precis` panic
+  ([GO-2026-6629](https://pkg.go.dev/vuln/GO-2026-6629)). The plugin
+  reaches both only in pgx's SCRAM login to PostgreSQL, on the password it
+  is configured with.
+
 ## [0.6.2] — 2026-11-05
 
 A dependency update; nothing changes for gosidian. The manifest is the
