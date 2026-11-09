@@ -7,7 +7,7 @@ docling==2.138.0
 # Dockerfile.
 pillow==13.0.0
 docling-core==2.104.0
-docling-parse==7.22.4
+docling-parse==7.23.0
 docling-ibm-models==4.0.4
 # certifi without the emSign root of the compromised intermediate CAs
 # (newer than PYPI_BEFORE: PYPI_NEWER in the Dockerfile); pip, setuptools
