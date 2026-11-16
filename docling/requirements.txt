@@ -15,7 +15,7 @@ docling-ibm-models==4.0.4
 # advisories.
 certifi==2026.10.23
 pip==26.2.1
-setuptools==84.1.0
+setuptools==84.2.1
 wheel==0.48.0
 # soupsieve, which beautifulsoup4 brings, past GHSA-mmhr-3c5m-f64f
 # (polynomial time in the descendant combinator, high): docling's HTML
