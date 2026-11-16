@@ -1,0 +1,16 @@
+# docling's document model: the plugin loads the JSON docling-rs writes and
+# takes its markdown from it. No docling, no torch: the reader is the
+# docling-rs binary (Dockerfile).
+docling-core==2.104.0
+# A presentation's footer, date and number placeholders, for slides.
+python-pptx==1.0.2
+# Pillow 13 for its advisories, and certifi without the emSign root of the
+# compromised intermediate CAs (newer than PYPI_BEFORE: PYPI_NEWER in the
+# Dockerfile); pip, which the image has from Python, past its advisory.
+pillow==13.0.0
+certifi==2026.10.23
+pip==26.2.1
+mcp==2.3.0
+httpx==0.28.1
+jsonschema==4.26.0
+uvicorn==0.54.0

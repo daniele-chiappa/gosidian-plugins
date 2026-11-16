@@ -1,6 +1,7 @@
 // The files of a step: those gosidian hands by reference, fetched into the
 // workspace's in/ and checked against their size and SHA-256, and those the
 // agent writes in out/, given back to gosidian as attachments.
+import type { Wait } from "./kit/contract.ts";
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
@@ -16,11 +17,15 @@ export interface FileRef {
 // before it failed, is what the step spent (usage, cost): the error's
 // structured content, which gosidian counts in the task and the team's
 // budget.
+// wait: the step could not work for a limit outside it (kit/contract.ts):
+// gosidian holds it and tries again.
 export class StepError extends Error {
   spent?: Record<string, unknown>;
-  constructor(message: string, spent?: Record<string, unknown>) {
+  wait?: Wait;
+  constructor(message: string, spent?: Record<string, unknown>, wait?: Wait) {
     super(message);
     this.spent = spent;
+    this.wait = wait;
   }
 }
 

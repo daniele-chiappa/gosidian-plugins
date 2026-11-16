@@ -37,9 +37,9 @@ RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.14.0 t
 # docling 2.130 two days after it came out).
 ARG PYPI_BEFORE=2026-10-12T07:00:00Z
 # Packages taken newer than PYPI_BEFORE, each as PyPI stood just after its
-# release: Pillow 13 and certifi for their advisories, and the docling
-# packages that allow Pillow 13.
-ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z certifi=2026-10-23T11:45:00Z doclang=2026-10-15T14:55:00Z docling-core=2026-10-22T14:05:00Z docling-parse=2026-10-21T12:02:00Z docling-ibm-models=2026-10-21T11:36:00Z"
+# release: Pillow 13, certifi, soupsieve and setuptools for their
+# advisories, and the docling packages that allow Pillow 13.
+ARG PYPI_NEWER="pillow=2026-10-16T22:20:00Z certifi=2026-10-23T11:45:00Z soupsieve=2026-11-04T16:40:00Z setuptools=2026-10-19T20:15:00Z doclang=2026-10-15T14:55:00Z docling-core=2026-10-22T14:05:00Z docling-parse=2026-10-21T12:02:00Z docling-ibm-models=2026-10-21T11:36:00Z"
 COPY requirements.txt overrides.txt /app/
 RUN pip install uv==0.12.19 \
  && uv pip install --system --exclude-newer "${PYPI_BEFORE}" \

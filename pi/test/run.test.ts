@@ -107,6 +107,15 @@ test("an answer that stays no JSON fails the step", async () => {
   });
 });
 
+test("a provider's limit is a wait, another error of its is not", async () => {
+  await withStep([{ status: 402 }], async ({ env }) => {
+    await assert.rejects(runStep(env, { prompt: "x" }, undefined, never), (e: Error) => e instanceof StepError && /the agent failed/.test(e.message) && e.wait?.reason === "the provider answered 402");
+  });
+  await withStep([{ status: 400 }], async ({ env }) => {
+    await assert.rejects(runStep(env, { prompt: "x" }, undefined, never), (e: Error) => e instanceof StepError && /the agent failed/.test(e.message) && e.wait === undefined);
+  });
+});
+
 test("the limits stop the agent: turns, tokens (the run's too), time, cancel", async () => {
   const loop = () => ({ toolCalls: [{ name: "ls", args: { path: "." } }], usage: { prompt: 300, completion: 10 } });
   await withStep(loop, async ({ env }) => {

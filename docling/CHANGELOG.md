@@ -4,6 +4,26 @@ The changes of the `docling` plugin, newest first. A tag
 `docling/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-docling:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.5.7] — 2026-11-16
+
+Fixes for the advisories of what the image holds; nothing changes for
+gosidian. The manifest is the same but for the version.
+
+### Security
+- **soupsieve** 3.0.2 → 4.0.1
+  ([GHSA-mmhr-3c5m-f64f](https://github.com/advisories/GHSA-mmhr-3c5m-f64f),
+  high), which beautifulsoup4 brings: a selector with descendant
+  combinators took time polynomial in the nesting of the document, and
+  docling's HTML backend selects `p:has(...)` on the HTML it converts, so
+  a small, deeply nested page kept the plugin's CPU busy. 4.0.1 also
+  stops `:has()` from taking quadratic time. In 4.0 the contents of a
+  `template` are no longer part of the document for a selector, as in a
+  browser.
+- **setuptools** 84.0.0 → 84.1.0
+  ([GHSA-xmj3-9gf7-h52w](https://github.com/advisories/GHSA-xmj3-9gf7-h52w),
+  low), a path escape on Windows while installing a legacy wheel, which
+  the plugin does not do once built.
+
 ## [0.5.6] — 2026-11-09
 
 Fixes for the advisories of what the image holds; nothing changes for

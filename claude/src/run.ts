@@ -14,7 +14,7 @@ import { Lines, StreamState, type Outcome } from "./events.ts";
 import { check, extractJSON, schemaError } from "./schema.ts";
 import { collect, fetchAll, refsOf, StepError, type OutFile } from "./files.ts";
 import { origin } from "./steps.ts";
-import { META, type MCPLevel } from "./kit/contract.ts";
+import { META, waitOf, type MCPLevel } from "./kit/contract.ts";
 import { RepoError, Workspace, type RepoRequest } from "./kit/git.ts";
 import { killUser, signalGroup } from "./kit/signal.ts";
 import type { AnthropicProxy, Tokens } from "./proxy.ts";
@@ -531,7 +531,11 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
   const budget = Math.min(s.max_tokens, tokensLeft ?? Number.POSITIVE_INFINITY);
   // The subscription's limits are those of its own endpoint's steps.
   const short = endpoint.auth === "oauth" ? await env.subscription.shortfall(p.limits.min_left_percent, LIMITS_MAX_AGE_MS) : "";
-  if (short) throw new StepError(short);
+  if (short) {
+    // The quota comes back by itself: gosidian holds the step until then.
+    const until = waitOf(`429 ${short}`)?.until;
+    throw new StepError(short, undefined, { reason: "the subscription's quota", ...(until ? { until } : {}) });
+  }
   const started = Date.now();
 
   return env.versions.use(async (installed, bin) => {
@@ -590,7 +594,13 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
       }
       const o = run.state.outcome();
       if (!o) throw new StepError(`Claude Code ended without a result (exit ${run.exit}): ${run.stderr || "no message"}`, spent());
-      if (o.subtype !== "success" || o.isError) throw new StepError(failText(o, s), spent(o));
+      if (o.subtype !== "success" || o.isError) {
+        // The API's own limits (429, 529, a usage limit reached) end by
+        // themselves; a stop at the step's max_turns or max_cost does not.
+        const own = o.subtype === "error_max_turns" || o.subtype === "error_max_budget_usd";
+        const wait = own ? undefined : waitOf(o.errors.join("; ") || o.text || o.terminal || "", o.apiError);
+        throw new StepError(failText(o, s), spent(o), wait);
+      }
       const cost = !t.compatible ? { cost: o.cost, cost_source: "agent" } : prices ? { cost: priceOf(tokens, prices), cost_source: "prices" } : { cost: 0, cost_source: "none" };
       const out: Record<string, unknown> = {
         text: o.text,

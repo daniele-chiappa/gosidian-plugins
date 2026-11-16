@@ -40,3 +40,31 @@ export function toolsFor(level: Access, byLevel: Record<Access, string[]>, allow
   }
   return want.filter((t) => allowed.includes(t));
 }
+
+// A step that could not work for a limit outside it and its settings (the
+// provider's key reached its limit, the subscription has no quota left)
+// says so in its error's structured content, as wait: gosidian holds the
+// step of a team's task and tries again, where it would fail it. until,
+// when known, is when the limit ends (RFC 3339).
+export interface Wait {
+  reason: string;
+  until?: string;
+}
+
+const LIMIT_WORDS = /key limit exceeded|rate.?limit|too many requests|quota|insufficient (credits?|balance|funds)|usage limit|credit balance|overloaded/i;
+
+// waitOf reads a provider's error (its text, and its HTTP status when the
+// caller has it apart): a Wait when it is a limit that ends by itself or
+// by its owner's hand, undefined for any other failure. 402, 429 and 529
+// are limits; 403 and 503 only when the text says so.
+export function waitOf(text: string, status?: number | null): Wait | undefined {
+  const m = /^\s*(\d{3})\b/.exec(text) ?? /"code"\s*:\s*(\d{3})\b/.exec(text);
+  const code = status ?? (m ? Number(m[1]) : 0);
+  const words = LIMIT_WORDS.test(text);
+  const limit = code === 402 || code === 429 || code === 529 || ((code === 403 || code === 503 || !code) && words);
+  if (!limit) return undefined;
+  const reason = code ? `the provider answered ${code}` : "the provider's limit";
+  const r = /resets?(?: at)?:? (\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:\d{2}))/.exec(text);
+  const at = r ? new Date(r[1]) : undefined;
+  return at && !Number.isNaN(at.getTime()) ? { reason, until: at.toISOString() } : { reason };
+}

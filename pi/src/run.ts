@@ -10,7 +10,7 @@ import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 import { Ajv } from "ajv";
-import { ACCESS, META, type Access, type MCPLevel } from "./kit/contract.ts";
+import { ACCESS, META, waitOf, type Access, type MCPLevel } from "./kit/contract.ts";
 import { RepoError, Workspace, type RepoRequest } from "./kit/git.ts";
 import { killUser, signalGroup } from "./kit/signal.ts";
 import { accessTools, endpointOf, nodeSchema, type Effort, type MCPGrant, type Model, type Preset } from "./preset.ts";
@@ -352,7 +352,8 @@ export async function runStep(env: Env, args: Record<string, unknown>, tokensLef
         throw new StepError(`the agent stopped at ${st.limit} (${limitText(st.limit, s)}) after ${turns} turns, ${usage.total_tokens} tokens, $${usage.cost.toFixed(4)}`, spent());
       }
       if (st.stop === "error" || st.stop === "aborted" || !st.settled) {
-        throw new StepError(`the agent failed: ${st.error || st.stderr || `pi ended (${st.exit})`}`, spent());
+        const why = st.error || st.stderr || `pi ended (${st.exit})`;
+        throw new StepError(`the agent failed: ${why}`, spent(), waitOf(why));
       }
       const out: Record<string, unknown> = {
         text: st.text,

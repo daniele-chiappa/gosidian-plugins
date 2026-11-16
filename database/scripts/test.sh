@@ -3,6 +3,9 @@
 # containers: pgvector 0.8.6 on PostgreSQL 18, Qdrant 1.19.1, and SQLite
 # with sqlite-vec built for the run. GOCACHE_DIR and GOPATH_DIR keep Go's
 # caches between runs; the files are handed back to the caller's uid.
+# SRC_MOUNT names a docker volume that holds this folder, for a caller that
+# is itself a container beside the daemon (the Gitea runner's job), where
+# a bind mount of $PWD would be a path of the daemon's host.
 set -eu
 cd "$(dirname "$0")/.."
 NET=gosidian-db-test-$$
@@ -16,7 +19,7 @@ CPUS=$(nproc)
 [ "$CPUS" -gt 8 ] && CPUS=8
 CACHE=${GOCACHE_DIR:-}
 GPATH=${GOPATH_DIR:-}
-docker run --rm --network "$NET" --cpus="$CPUS" -v "$PWD:/src" -w /src \
+docker run --rm --network "$NET" --cpus="$CPUS" -v "${SRC_MOUNT:-$PWD}:/src" -w /src \
   ${CACHE:+-v "$CACHE:/cache" -e GOCACHE=/cache} ${GPATH:+-v "$GPATH:/gopath" -e GOPATH=/gopath} \
   -e PG_URL="postgres://postgres:test@$NET-pg:5432/postgres" -e QDRANT_URL="http://$NET-qdrant:6333" \
   -e SQLITE_VEC=/tmp/vec/vec0 -e CGO_ENABLED=1 -e OWNER="$(id -u):$(id -g)" \

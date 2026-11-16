@@ -368,8 +368,9 @@ export async function start(opts: StartOptions): Promise<App> {
       } catch (e) {
         const msg = (e as Error).message;
         elog(e instanceof StepError ? `${name} failed` : `${name} error`, { error: msg, seconds: (Date.now() - t0) / 1000 });
-        // A step that spent before it failed says what, for gosidian's count.
-        const spent = e instanceof StepError && e.spent ? { structuredContent: { error: msg, ...e.spent } } : {};
+        // A step that spent before it failed says what, for gosidian's
+        // count; one that waits for a limit outside it says so (wait).
+        const spent = e instanceof StepError && (e.spent || e.wait) ? { structuredContent: { error: msg, ...e.spent, ...(e.wait ? { wait: e.wait } : {}) } } : {};
         return { isError: true, ...spent, content: [{ type: "text", text: e instanceof StepError ? msg : `internal error: ${msg}` }] };
       }
     });

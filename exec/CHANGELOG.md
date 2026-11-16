@@ -4,6 +4,17 @@ The changes of the `exec` plugin, newest first. A tag `exec/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-exec:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.1.3] — 2026-11-16
+
+The image built again from its bases as they are now; nothing changes in
+the code or for gosidian. The manifest is the same but for the version.
+
+### Security
+- **git** 2.54.0 → 2.54.1 (CVE-2026-105437, high), from Alpine, which the
+  sandbox runs for a script's repository.
+- **Go** 1.27.4, the sandbox's toolchain from `golang:1.27-alpine`, past
+  GO-2026-6859 in its standard library.
+
 ## [0.1.2] — 2026-11-05
 
 Dependency updates for six advisories; nothing changes for gosidian. The

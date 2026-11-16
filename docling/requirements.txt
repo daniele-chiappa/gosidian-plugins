@@ -15,8 +15,14 @@ docling-ibm-models==4.0.4
 # advisories.
 certifi==2026.10.23
 pip==26.2.1
-setuptools==84.0.0
+setuptools==84.1.0
 wheel==0.48.0
+# soupsieve, which beautifulsoup4 brings, past GHSA-mmhr-3c5m-f64f
+# (polynomial time in the descendant combinator, high): docling's HTML
+# backend selects p:has(...) on the document it converts, and 4.0.1 also
+# stops :has() from taking quadratic time. Newer than PYPI_BEFORE:
+# PYPI_NEWER in the Dockerfile.
+soupsieve==4.0.1
 mcp==2.3.0
 # Used by the server itself: mcp 2 no longer brings httpx.
 httpx==0.28.1

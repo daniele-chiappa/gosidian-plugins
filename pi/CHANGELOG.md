@@ -4,6 +4,18 @@ The changes of the `pi` plugin, newest first. A tag `pi/vX.Y.Z` publishes
 `ghcr.io/daniele-chiappa/gosidian-pi:X.Y.Z`, and its release notes are its
 section here.
 
+## [Unreleased]
+
+## [0.4.2] — 2026-11-16
+
+### Added
+- **A step that waits for a limit says so** (`wait` in the error's
+  structured content, agent-run/1): A provider's error that is a limit (402, 429, 529; 403 or 503 that name a limit, a quota, a key's limit) carries it, with the time it resets when the error says it.
+  gosidian (from 2.160.0) holds such a step of a
+  team's task and tries again later in the same attempt, where it failed
+  the task's attempt before; an older gosidian reads the error as before.
+  The manifest does not change.
+
 ## [0.4.1] — 2026-11-05
 
 Dependency updates for six advisories; nothing changes for gosidian. The

@@ -98,6 +98,22 @@ updates:
       prefix: "chore"
       include: "scope"
 
+  # docling-rs: Python packages (requirements.txt)
+  - package-ecosystem: "pip"
+    directory: "/docling-rs"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Etc/UTC"
+    cooldown:
+      default-days: 14
+    open-pull-requests-limit: 3
+    labels: ["dependencies", "docling-rs"]
+    commit-message:
+      prefix: "chore"
+      include: "scope"
+
   # pi: npm packages (pi itself among them)
   - package-ecosystem: "npm"
     directory: "/pi"
@@ -243,7 +259,7 @@ updates:
 
   # The base images of the Dockerfiles
   - package-ecosystem: "docker"
-    directories: ["/storage", "/docling", "/pi", "/claude", "/exec", "/database", "/images", "/ocr", "/preview", "/notify"]
+    directories: ["/storage", "/docling", "/pi", "/claude", "/exec", "/database", "/images", "/ocr", "/preview", "/notify", "/docling-rs"]
     schedule:
       interval: "weekly"
       day: "monday"

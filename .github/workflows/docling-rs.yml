@@ -1,0 +1,140 @@
+name: docling-rs
+# A PR, or a push that touches docling-rs/, checks the server and runs its
+# tests, against a stand-in for the docling-rs binary. A tag
+# docling-rs/vX.Y.Z builds its image (amd64, about 1.2 GB: docling.rs's
+# binary and models are in it), tries it on a PDF, pushes it to GHCR as
+# :X.Y.Z and :latest, and makes the release with its section of
+# docling-rs/CHANGELOG.md.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["docling-rs/**", ".github/workflows/docling-rs.yml"]
+    tags: ["docling-rs/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-docling-rs
+
+jobs:
+  check:
+    name: Test the docling-rs plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Compile
+        run: docker run --rm -v "$PWD/docling-rs:/src:ro" python:3.12-slim python -X pycache_prefix=/tmp -m py_compile /src/server.py /src/test_convert.py
+
+      - name: Test against a stand-in for docling-rs
+        run: sh docling-rs/scripts/test.sh
+
+  image:
+    name: Build & push image
+    needs: [check]
+    if: startsWith(github.ref, 'refs/tags/docling-rs/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#docling-rs/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            docling-rs/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "docling-rs/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build
+        run: |
+          set -eu
+          docker build --build-arg VERSION="${{ steps.meta.outputs.version }}" --build-arg REVISION="${GITHUB_SHA}" \
+            -t "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" docling-rs/
+          docker tag "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}" "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Try it
+        # The real binary and its models, without a network: the manifest,
+        # and a one-page PDF written here converted to its heading.
+        run: |
+          set -eu
+          docker run -d --name docling-rs-smoke --network none --read-only --tmpfs /tmp:size=512m -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          for _ in $(seq 1 30); do
+            if docker exec docling-rs-smoke python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" 2>/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec docling-rs-smoke python -c "
+          import base64, json, urllib.request
+          def call(name, args):
+              req = urllib.request.Request('http://127.0.0.1:8000/mcp', method='POST',
+                  data=json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'tools/call', 'params': {'name': name, 'arguments': args}}).encode(),
+                  headers={'Authorization': 'Bearer smoke', 'Content-Type': 'application/json', 'Accept': 'application/json, text/event-stream', 'MCP-Protocol-Version': '2025-06-18'})
+              return json.load(urllib.request.urlopen(req, timeout=300))['result']
+          m = call('gosidian_manifest', {})['structuredContent']
+          assert m['name'] == 'docling-rs' and m['gosidian'] == 1 and m['version'] == '${{ steps.meta.outputs.version }}', m
+          assert [n['name'] for n in m['nodes']] == ['convert'], m['nodes']
+          text = b'BT /F1 24 Tf 72 720 Td (Smoke test heading) Tj ET BT /F1 11 Tf 72 690 Td (A line of body text under the heading of the page.) Tj ET'
+          objs = [b'<< /Type /Catalog /Pages 2 0 R >>', b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+                  b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >>',
+                  b'<< /Length %d >>\nstream\n' % len(text) + text + b'\nendstream',
+                  b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>']
+          pdf, offs = bytearray(b'%PDF-1.4\n'), []
+          for n, o in enumerate(objs, 1):
+              offs.append(len(pdf)); pdf += b'%d 0 obj\n' % n + o + b'\nendobj\n'
+          xref = len(pdf)
+          pdf += b'xref\n0 6\n0000000000 65535 f \n' + b''.join(b'%010d 00000 n \n' % o for o in offs)
+          pdf += b'trailer\n<< /Size 6 /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n' % xref
+          r = call('convert', {'file': {'name': 'smoke.pdf', 'data': base64.b64encode(bytes(pdf)).decode()}, 'ocr': False})
+          assert not r.get('isError'), r
+          s = r['structuredContent']
+          assert s['pages'] == 1 and 'Smoke test heading' in s['markdown'] and s['engine'].startswith('docling-rs '), s
+          print('manifest', m['version'], '-', s['engine'], '-', s['markdown'].strip()[:60])
+          "
+          docker exec docling-rs-smoke test -s /licenses/THIRD_PARTY_NOTICES.md
+          docker exec docling-rs-smoke test -s /models/MODELS_NOTICE.md
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        run: |
+          docker push "${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}"
+          docker push "${{ steps.meta.outputs.base }}:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "docling-rs ${{ steps.meta.outputs.version }}" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`${{ steps.meta.outputs.base }}:${{ steps.meta.outputs.version }}\` (amd64)"
+            echo "- \`${{ steps.meta.outputs.base }}:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f docling-rs-smoke || true
