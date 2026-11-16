@@ -5,7 +5,7 @@
 
 # docling.rs, by version and digest. Its speech and chunking models go: the
 # plugin converts documents.
-FROM ghcr.io/docling-project/docling-rs:2.82.1@sha256:bd44e858da69f7c378fa75842e123b021196cdf4f35737580891ef325d1504c0 AS engine
+FROM ghcr.io/docling-project/docling-rs:v2.84.0@sha256:b412d02e5f63b5c8ed6cee6d9f5b59fb37fe1f6a705f268e9e3f5a3f78324dac AS engine
 USER root
 RUN rm -rf /app/.models/asr /app/.models/chunk \
  && /usr/local/bin/docling-rs --version
