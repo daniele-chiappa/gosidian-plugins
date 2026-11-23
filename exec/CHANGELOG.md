@@ -4,6 +4,17 @@ The changes of the `exec` plugin, newest first. A tag `exec/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-exec:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.1.4] — 2026-11-23
+
+The image built again from its bases, with the packages of its Alpine
+base upgraded; nothing changes in the code or for gosidian. The manifest
+is the same but for the version.
+
+### Security
+- **zlib** 1.3.2-r1 → 1.4-r0 (CVE-2026-4738) and **OpenSSL** 3.5.9-r0 →
+  3.5.9-r1 (five Alpine advisories): the Dockerfile runs `apk upgrade`,
+  since `node:24-alpine` lags the repository's fixes.
+
 ## [0.1.3] — 2026-11-16
 
 The image built again from its bases as they are now; nothing changes in

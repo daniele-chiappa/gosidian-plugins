@@ -4,6 +4,18 @@ The changes of the `images` plugin, newest first. A tag
 `images/vX.Y.Z` publishes `ghcr.io/daniele-chiappa/gosidian-images:X.Y.Z`,
 and its release notes are its section here.
 
+## [0.2.3] — 2026-11-23
+
+The image built again from its bases, with the packages of its Alpine
+base upgraded; nothing changes in the code or for gosidian. The manifest
+is the same but for the version.
+
+### Security
+- **zlib** 1.3.2-r1 → 1.4-r0 (CVE-2026-4738) and **OpenSSL** 3.5.9-r0 →
+  3.5.9-r1 (five Alpine advisories): the Dockerfile runs `apk upgrade`,
+  since `alpine:3.24` lags the repository's fixes.
+- **Go** 1.27.4, past GO-2026-6859 in its standard library.
+
 ## [0.2.2] — 2026-11-05
 
 A dependency update; nothing changes for gosidian. The manifest is the

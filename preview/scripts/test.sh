@@ -6,6 +6,9 @@
 # user of their own; in the end the container gives back to the caller's
 # user every file it made. PREVIEW_TEST_NO_PLAYWRIGHT=1 skips the browser
 # (and its tests).
+# SRC_MOUNT names a docker volume that holds this folder, for a caller that
+# is itself a container beside the daemon (the Gitea runner's job), where
+# a bind mount of the folder would be a path of the daemon's host.
 #
 #   preview/scripts/test.sh
 set -eu
@@ -32,7 +35,7 @@ if [ -z "${PREVIEW_TEST_NO_PLAYWRIGHT:-}" ]; then
 fi
 docker run --rm --network "$NAME" --network-alias tests -e HOME=/tmp -e npm_config_update_notifier=false -e OWNER="$(id -u):$(id -g)" \
 	-e PREVIEW_TEST_PLAYWRIGHT_WS="$WS" -e PREVIEW_TEST_HOST=tests \
-	-v "$DIR":/app -w /app node:24-alpine \
+	-v "${SRC_MOUNT:-$DIR}":/app -w /app node:24-alpine \
 	sh -c 'rc=0
 		{ npm ci --ignore-scripts --no-audit --no-fund --loglevel=error && npm run check \
 			&& adduser -D -u 19999 tester && su tester -s /bin/sh -c "PREVIEW_TEST_PLAYWRIGHT_WS=$PREVIEW_TEST_PLAYWRIGHT_WS PREVIEW_TEST_HOST=$PREVIEW_TEST_HOST npm test"; } || rc=$?

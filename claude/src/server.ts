@@ -101,16 +101,21 @@ export function operations(p: Preset): Operation[] {
   ];
 }
 
-export function manifest(p: Preset, registry = NPM_REGISTRY): Record<string, unknown> {
+// manifest is the plugin's manifest. Its run, as a node and as a tool, bears
+// as many calls at once as the workers (CLAUDE_WORKERS): gosidian queues
+// the others, where their time does not run, while version, update, usage
+// and pr take no worker's place in its count.
+export function manifest(p: Preset, registry = NPM_REGISTRY, workers = 1): Record<string, unknown> {
   const ops = operations(p);
   const files = (o: Operation) => (o.files ? { files: ["files"], file_refs: true } : {});
+  const limit = (o: Operation) => (o.name === "run" ? { max_concurrent: workers } : {});
   return {
     name: p.name,
     version: VERSION,
     gosidian: 1,
     description: p.description,
-    nodes: ops.map((o) => ({ name: o.name, tool: o.name, description: o.description, ...(o.contract ? { contract: o.contract } : {}), ...(o.mcp ? { mcp: true } : {}), ...files(o), input_schema: o.input, output_schema: o.output })),
-    tools: ops.map((o) => ({ name: o.name, access: o.access, description: o.description, ...files(o), input_schema: o.input, output_schema: o.output })),
+    nodes: ops.map((o) => ({ name: o.name, tool: o.name, description: o.description, ...(o.contract ? { contract: o.contract } : {}), ...(o.mcp ? { mcp: true } : {}), ...files(o), ...limit(o), input_schema: o.input, output_schema: o.output })),
+    tools: ops.map((o) => ({ name: o.name, access: o.access, description: o.description, ...files(o), ...limit(o), input_schema: o.input, output_schema: o.output })),
     permissions: {
       files: true,
       network: [...new Set(["gosidian", ...Object.values(p.endpoints).map((e) => new URL(e.url).host), ...hostsOf(p.repos), new URL(registry).host])],
@@ -261,7 +266,7 @@ export async function start(opts: StartOptions): Promise<App> {
   env.versions = versions;
   env.subscription = subscription;
 
-  const man = manifest(preset, opts.registryUrl);
+  const man = manifest(preset, opts.registryUrl, opts.workers);
   const ops = operations(preset);
   const ajv = new Ajv({ allErrors: true, useDefaults: true, strict: false });
   const compiled = new Map<string, ReturnType<typeof ajv.compile>>();

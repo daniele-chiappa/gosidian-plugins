@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Ufficio</title>
+    <link rel="stylesheet" href="./src/style.css" />
+    <script type="module" src="./src/main.ts"></script>
+  </head>
+  <body>
+    <header class="bar">
+      <div class="who">
+        <h1 id="title">Ufficio</h1>
+        <p id="coordinator" class="sub" hidden></p>
+      </div>
+      <dl id="facts" class="facts" hidden>
+        <div id="budget-fact">
+          <dt id="budget-label"></dt>
+          <dd><span id="budget-text"></span><span id="budget-bar" class="bar-meter" aria-hidden="true"><span id="budget-fill"></span></span></dd>
+        </div>
+        <div>
+          <dt id="agents-label"></dt>
+          <dd id="agents-text"></dd>
+        </div>
+      </dl>
+      <div class="actions">
+        <div class="seg" role="group" id="view-group">
+          <button type="button" id="view-map" aria-pressed="true"></button>
+          <button type="button" id="view-3d" aria-pressed="false"></button>
+          <button type="button" id="view-list" aria-pressed="false"></button>
+        </div>
+        <button type="button" id="refresh"></button>
+        <button type="button" id="open-note" hidden></button>
+        <button type="button" id="edit-toggle" aria-pressed="false" hidden></button>
+        <span id="demo-badge" class="badge" hidden></span>
+      </div>
+    </header>
+
+    <p id="notice" class="notice" role="status" hidden></p>
+    <section id="draft" class="draft" hidden aria-labelledby="draft-title">
+      <div class="draft-head">
+        <h2 id="draft-title"></h2>
+        <p id="draft-count"></p>
+        <div class="draft-actions">
+          <button type="button" id="draft-undo"></button>
+          <button type="button" id="draft-discard"></button>
+          <button type="button" id="team-fields"></button>
+        </div>
+      </div>
+      <p id="draft-hint" class="muted"></p>
+      <p id="draft-status" class="draft-status" role="status" hidden></p>
+      <p id="draft-rebased" class="notice warn" hidden></p>
+      <p id="draft-creates" class="muted" hidden></p>
+      <details id="palette" class="palette">
+        <summary id="palette-title"></summary>
+        <p id="palette-hint" class="muted"></p>
+        <ul id="palette-cards" class="cards"></ul>
+        <div id="add-role" class="row-form" role="group"></div>
+      </details>
+      <details id="block-details" class="block">
+        <summary id="block-title"></summary>
+        <pre id="block-pre"></pre>
+      </details>
+    </section>
+    <p id="pipelines-off" class="notice quiet" hidden></p>
+    <section id="problems" class="problems" hidden aria-labelledby="problems-title">
+      <h2 id="problems-title"></h2>
+      <ul id="problems-list"></ul>
+    </section>
+
+    <main id="body" class="body" hidden>
+      <div id="views" class="views">
+        <div id="stage" class="stage">
+          <canvas id="map" role="img"></canvas>
+          <div id="signs" class="signs" aria-hidden="true"></div>
+          <div id="labels" class="labels" role="group"></div>
+          <div id="camera" class="camera" role="group" hidden>
+            <button type="button" id="cam-left" class="icon-button"></button>
+            <button type="button" id="cam-right" class="icon-button"></button>
+            <button type="button" id="cam-in" class="icon-button"></button>
+            <button type="button" id="cam-out" class="icon-button"></button>
+            <button type="button" id="cam-reset"></button>
+          </div>
+        </div>
+        <div id="list" class="list" hidden>
+          <ul id="list-items" role="list"></ul>
+        </div>
+        <p id="keys-hint" class="hint"></p>
+        <p id="delegate-hint" class="hint" hidden></p>
+      </div>
+      <aside id="panel" class="panel" hidden aria-labelledby="panel-title">
+        <div class="panel-head">
+          <span id="panel-swatch" class="swatch" aria-hidden="true"></span>
+          <h2 id="panel-title" tabindex="-1"></h2>
+          <button type="button" id="panel-close" class="icon-button"></button>
+        </div>
+        <p id="panel-state" class="panel-state"></p>
+        <p id="panel-spent" class="panel-spent"></p>
+        <h3 id="panel-fields-title"></h3>
+        <div id="panel-edit" class="edit-form" hidden></div>
+        <dl id="panel-fields" class="fields"></dl>
+        <h3 id="panel-tasks-title"></h3>
+        <ul id="panel-tasks" class="tasks"></ul>
+        <h3 id="panel-agent-title"></h3>
+        <div id="panel-agent"></div>
+        <h3 id="panel-notes-title" hidden></h3>
+        <ul id="panel-notes" class="tasks" hidden></ul>
+      </aside>
+    </main>
+
+    <footer id="legend" class="legend" hidden>
+      <h2 id="legend-title" class="sr-only"></h2>
+      <ul id="legend-list"></ul>
+      <p id="updated" class="updated"></p>
+    </footer>
+    <div id="live" class="sr-only" aria-live="polite"></div>
+  </body>
+</html>

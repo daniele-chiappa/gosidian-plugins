@@ -7,6 +7,9 @@
 FROM golang:1.27-alpine AS go
 
 FROM node:24-alpine
+# The base's packages at their latest fixes: an image tag lags the Alpine
+# repository (on 2026-11-20 alpine:3.24 still had zlib 1.3.2-r1, the repository 1.4-r0).
+RUN apk upgrade --no-cache
 COPY --from=go /usr/local/go /usr/local/go
 
 # The toolchains of the steps: git, Python with pip, make and a C/C++

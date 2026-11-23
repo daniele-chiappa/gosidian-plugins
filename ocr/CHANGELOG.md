@@ -4,6 +4,43 @@ The changes of the `ocr` plugin, newest first. A tag `ocr/vX.Y.Z`
 publishes `ghcr.io/daniele-chiappa/gosidian-ocr:X.Y.Z`, and its release
 notes are its section here.
 
+## [0.2.0] — 2026-11-20
+
+Tables with spanned cells as markdown grids on request, blank pages that
+no longer fail a conversion, and a brake on a model repeating the rows of
+a table or a chart. With the settings as they were, the markdown is the
+same: twenty pages of reports converted again come out byte for byte
+equal. The manifest changes (a setting and two outputs): accept it again.
+
+### Added
+- **`tables: markdown`**: a table whose cells span rows or columns comes
+  as a markdown grid too, a spanned cell's text in every place it covers,
+  instead of the HTML; a picture in a spanned cell is one file. The
+  default, `html`, writes them as before. On the pages of public reports,
+  a 12B model answering questions on such tables scored 5.48 out of 10
+  from the grids against 3.15 from the HTML.
+- **`empty_pages`** in the output: the pages read that gave nothing, blank
+  or with nothing the model found on them.
+- **`warnings`** in the output: what the plugin changed in the model's
+  output, by page.
+
+### Fixed
+- **A blank page with a few specks failed the conversion**: a page went to
+  the model when a single pixel was darker than 250 (one had 5 such pixels
+  in 3.9 million); the model found nothing, and the conversion failed with
+  the advice to run llama-server with `--special`. A page with at most 32
+  such pixels, or one in 100,000, is blank now. And when the model finds
+  no layout on any page of a document, the plugin asks it to lay out a
+  page of text it draws: the error about `--special` comes only when it
+  finds none there either; otherwise the pages come back empty, in
+  `empty_pages`.
+- **A model repeating the rows of a table or of a chart's data** (with
+  `charts: table` a chart gave the same four rows 186 times, 20,102
+  characters instead of about 3,000): a group of up to 50 rows coming 4
+  times in a row or more stays once, the rest goes, and `warnings` says so.
+  The client's own check looks for lines of 30 characters or more, and
+  these were 16.
+
 ## [0.1.2] — 2026-11-09
 
 Fixes for the advisories of what the image holds; nothing changes for

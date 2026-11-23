@@ -29,21 +29,43 @@ any reader of its PDF. A pipeline asks
 | `dpi` | 200 | the resolution a PDF's page is drawn at for the model, as MinerU draws it |
 | `pictures` | `true` | give back the pictures and charts as files |
 | `charts` | `image` | `table`: a chart also as the table of its data, read by the model |
+| `tables` | `html` | `markdown`: a table whose cells span rows or columns as a markdown grid too, a spanned cell's text in every place it covers |
 | `paratext` | `false` | keep the page headers, footers, page numbers and margin notes |
 
 Output: `markdown` (a picture is `![caption](fig-N.png)`), `title`, `pages`
 (read), `pages_in_file`, `tables`, `pictures` (`name`, `page`, `caption`),
-`engine` (`model`, `server`), `seconds`, and from gosidian `files` (`name`,
-`path`, `mime`, `markdown`).
+`engine` (`model`, `server`), `empty_pages` (the pages read that gave
+nothing: blank, or with nothing the model found on them), `warnings` (what
+the plugin changed in the model's output, by page), `seconds`, and from
+gosidian `files` (`name`, `path`, `mime`, `markdown`).
+
+`tables: markdown` is for the models that read the converted text: in a
+benchmark of answers on the pages of reports, a 12B model answering from
+tables with spanned cells in HTML scored 3.15 out of 10, and 5.48 from the
+same tables as grids, against 5.94 from the dataset's own markdown. A
+header on two rows becomes two rows of the grid, each column with its
+whole heading.
+
+`charts: table` gives the data of a chart as the model estimates it
+(`~17.2`), not as the document's table would: in the same benchmark it did
+not help the answers on charts.
 
 The model gives each page's blocks in reading order, and the plugin
 writes them: `doc_title` as `#`, `title` as `##`, `paragraph_title` as
 `###` (the model does not number the levels); a paragraph the model marks
 as going on from the one before, across a column's or a page's end, joined
 to it, a word cut by a hyphen made whole; a table in markdown, or in HTML
-when a cell spans rows or columns, which a markdown table cannot say; a
-formula between `$$`; a caption with its picture or table; the page
-headers, footers and numbers left out. A blank page is not sent.
+when a cell spans rows or columns (unless `tables: markdown`); a formula
+between `$$`; a caption with its picture or table; the page headers,
+footers and numbers left out. A blank page is not sent: one with no pixel
+darker than 250 but a few specks of dust or noise (at most 32, or one in
+100,000 pixels).
+
+A model sometimes repeats itself: the same rows of a table or of a chart's
+data, over and over, until its tokens run out. A group of up to 50 rows
+coming 4 times in a row or more stays once, the rest goes, and `warnings`
+says so for its page (blank rows do not count; a table saying a row three
+times keeps it).
 
 **`ocr.inspect`**: which pages of a PDF have no text, and whether the
 model's server answers; without a file, the server only. It reads the PDF's
@@ -97,8 +119,11 @@ llama-server -m MinerU2.5-Pro-2605-1.2B-Q8_0.gguf \
   --image-min-tokens 64 --image-max-tokens 2048 --api-key-file keys
 ```
 
-`--special` is required: without it the layout loses its tokens, and the
-plugin, finding no layout on any page, says so. The image token limits
+`--special` is required: without it the layout loses its tokens. When the
+model finds no layout on any page of a document, the plugin asks it to lay
+out a page of text it draws: if it finds none there either, the conversion
+fails and says to check `--special`; if it does, the pages were empty, and
+they come back in `empty_pages`. The image token limits
 reproduce the model's own preprocessing; llama.cpp's default for this
 architecture takes 2.5 times as long. Ollama cannot serve it (it never
 passes `--special`). vLLM serves the original weights as they are.
@@ -112,7 +137,7 @@ slot and 8k); on a CPU (6 cores of a Ryzen 7 5700G) about 100 s a page.
 ```yaml
 services:
   gosidian-ocr:
-    image: ghcr.io/daniele-chiappa/gosidian-ocr:0.1.2
+    image: ghcr.io/daniele-chiappa/gosidian-ocr:0.2.0
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${OCR_TOKEN:?}
@@ -161,7 +186,7 @@ stay in memory meanwhile, about 12 MB a page of A4.
 ## Building
 
 ```bash
-docker build --build-arg VERSION=0.1.2 -t gosidian-ocr:0.1.2 ocr/
+docker build --build-arg VERSION=0.2.0 -t gosidian-ocr:0.2.0 ocr/
 ```
 
 The image is built for amd64 (about 300 MB: no model, no torch).
@@ -176,9 +201,11 @@ They draw pages, each block of the layout a rectangle of its own colour,
 and run the plugin against a fake model's server that answers a page's
 layout by a mark in its corner and a block's content by its colour: the
 markdown of every kind of block, a paragraph across two pages, a table in
-markdown and in HTML, the pictures cut out, PNG, TIFF and PDF pages, a
-blank page, the server down, a key refused, a server without `--special`,
-and `inspect` on a PDF with a text layer.
+markdown and in HTML, a table with spanned cells as a grid, the rows a
+model repeats, the pictures cut out, PNG, TIFF and PDF pages, a blank page
+and one with specks, a page the model finds nothing on, the server down, a
+key refused, a server without `--special`, and `inspect` on a PDF with a
+text layer.
 
 ## Licenses
 

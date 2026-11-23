@@ -1,0 +1,13 @@
+{
+  "path": "prova/rotta.md",
+  "title": "rotta",
+  "line": 9,
+  "team": null,
+  "problems": [
+    { "line": 11, "message": "the team block does not read: yaml: line 3: mapping values are not allowed here" }
+  ],
+  "pipelines": true,
+  "spent_today": { "cost_usd": 0, "tokens": 0, "steps": 0 },
+  "roles": {},
+  "now": "2026-11-18T16:00:00+01:00"
+}

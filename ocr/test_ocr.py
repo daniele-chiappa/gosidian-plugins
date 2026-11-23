@@ -63,6 +63,8 @@ PAGES = {
             ("footer", (100, 960, 900, 980), (180, 120, 60), "Rev. 2"),
         ],
     },
+    # Not blank (its mark), but the model finds nothing on it.
+    "empty": {"mark": (0, 0, 255), "blocks": []},
 }
 
 PALETTE = {}
@@ -235,6 +237,7 @@ class ConvertTest(Base):
         self.assertEqual((out["pages"], out["pages_in_file"], out["tables"], out["title"]), (1, 1, 1, "Pump maintenance"))
         self.assertEqual(out["pictures"], [{"name": "fig-1.png", "page": 1, "caption": "Figure 1: the pump"}])
         self.assertEqual(out["engine"], {"model": "MinerU-test", "server": "127.0.0.1"})
+        self.assertEqual((out["empty_pages"], out["warnings"]), ([], []))
         fig = Image.open(io.BytesIO(files["fig-1.png"]))
         self.assertEqual(fig.size, (400, 280))
         self.assertEqual(fig.convert("RGB").getpixel((200, 140)), (120, 0, 120))
@@ -269,14 +272,41 @@ class ConvertTest(Base):
         self.assertEqual((files, out["pictures"]), ({}, []))
         self.assertIn("pump must be checked every week.\n\nFigure 1: the pump\n\nTable 1", out["markdown"])
 
+    def test_tables_as_markdown(self):
+        out, _ = self.convert("page.png", png(draw("two")), tables="markdown")
+        self.assertIn("\n\n| Torque | Torque |\n|---|---|\n| M8 | 25 Nm |\n", out["markdown"])
+        self.assertNotIn("<table", out["markdown"])
+
     def test_a_blank_page_is_not_sent(self):
         out, _ = self.convert("blank.png", png(Image.new("RGB", (W, H), "white")))
-        self.assertEqual((out["markdown"], Fake.requests), ("", 0))
+        self.assertEqual((out["markdown"], out["empty_pages"], Fake.requests), ("", [1], 0))
+
+    def test_a_page_with_specks_is_blank(self):
+        img = Image.new("RGB", (W, H), "white")
+        for x in range(5):
+            img.putpixel((300 + x * 40, 700), (90, 90, 90))
+        out, _ = self.convert("specks.png", png(img))
+        self.assertEqual((out["markdown"], out["empty_pages"], Fake.requests), ("", [1], 0))
+
+    def test_a_page_the_model_finds_nothing_on(self):
+        # No layout on any page: the plugin checks the server on a page of
+        # text it draws, which the model lays out, so the page is empty.
+        out, _ = self.convert("empty.png", png(draw("empty")))
+        self.assertEqual((out["markdown"], out["empty_pages"], Fake.requests), ("", [1], 2))
+
+    def test_an_empty_page_among_others(self):
+        buf = io.BytesIO()
+        draw("one").save(buf, format="TIFF", save_all=True, append_images=[draw("empty")])
+        out, _ = self.convert("scan.tiff", buf.getvalue())
+        self.assertIn("Pump maintenance", out["markdown"])
+        self.assertEqual(out["empty_pages"], [2])
 
     def test_a_server_without_special(self):
+        # No layout on the page, nor on the plugin's page of text.
         Fake.mode = "nospecial"
         text = self.error("convert", {"file": as_file("page.png", png(draw("one")))})
         self.assertIn("--special", text)
+        self.assertIn("a page of text", text)
 
     def test_the_server_down(self):
         server.SERVER_URL = f"http://127.0.0.1:{free_port()}"
@@ -337,6 +367,47 @@ class MarkdownTest(unittest.TestCase):
                                    lambda blob, caption: named.append(blob) or f"fig-{len(named)}.png")
         self.assertEqual(md, "| Icon | ![](fig-1.png) |\n|---|---|")
         self.assertEqual(len(named), 1)
+
+    def test_a_table_with_spans_as_a_grid(self):
+        html = ('<table><tr><td rowspan="2">Country</td><td colspan="2">Share</td></tr>'
+                '<tr><td>2022</td><td>2023</td></tr><tr><td>IT</td><td>42</td><td>43</td></tr></table>')
+        self.assertEqual(server.table_markdown(html, None), html)  # html: as it is
+        self.assertEqual(server.table_markdown(html, None, grid=True),
+                         "| Country | Share | Share |\n|---|---|---|\n| Country | 2022 | 2023 |\n| IT | 42 | 43 |")
+
+    def test_a_picture_in_a_spanned_cell_is_one_file(self):
+        dot = base64.b64encode(png(Image.new("RGB", (8, 8), (1, 2, 3)))).decode()
+        named = []
+        md = server.table_markdown(f'<table><tr><td colspan="2"><img src="data:image/png;base64,{dot}"/></td></tr>'
+                                   '<tr><td>a</td><td>b</td></tr></table>',
+                                   lambda blob, caption: named.append(blob) or f"fig-{len(named)}.png", grid=True)
+        self.assertEqual(md, "| ![](fig-1.png) | ![](fig-1.png) |\n|---|---|\n| a | b |")
+        self.assertEqual(len(named), 1)
+
+    def test_the_rows_of_a_chart_repeated(self):
+        head = ["| Region | Share |", "| --- | --- |", "| Spain | ~60% |", "| Italy | ~60% |"]
+        loop = ["| France | ~3% |", "| Germany | ~3% |", "| UK | ~3% |", "| Ireland | ~3% |"]
+        out, dropped = server.content_repeats_out("\n".join(head + loop * 6 + loop[:2]))
+        self.assertEqual((out, dropped), ("\n".join(head + loop), 5 * 4 + 2))
+
+    def test_the_rows_of_an_html_table_repeated(self):
+        row = "<tr><td>x</td><td>1</td></tr>"
+        out, dropped = server.content_repeats_out("<table><tr><td>k</td><td>v</td></tr>" + row * 5 + "</table>")
+        self.assertEqual((out, dropped), ("<table><tr><td>k</td><td>v</td></tr>" + row + "</table>", 4))
+
+    def test_rows_a_table_may_repeat(self):
+        rows = ["| a | 1 |", "| a | 1 |", "| a | 1 |", "| b | 2 |"]  # three times: a table can say it
+        self.assertEqual(server.repeats_out(rows), (rows, 0))
+        empty = ["| | |"] * 6
+        self.assertEqual(server.repeats_out(empty), (empty, 0))
+
+    def test_a_chart_repeated_is_cut_and_said(self):
+        w, said = server.Writer(), []
+        content = "\n".join(["| A | B |", "| --- | --- |"] + ["| x | 1 |", "| y | 2 |"] * 5)
+        blocks = [{"type": "chart", "bbox": [0.1, 0.1, 0.9, 0.5], "content": content}]
+        server.page_markdown(w, blocks, lambda bbox, caption: "", lambda blob, caption: "", False, "table", warn=said.append)
+        self.assertEqual(w.parts, ["| A | B |\n| --- | --- |\n| x | 1 |\n| y | 2 |"])
+        self.assertEqual(said, ["a chart's table repeated its rows: 8 left out"])
 
     def test_captions_go_to_the_nearest_block(self):
         blocks = [

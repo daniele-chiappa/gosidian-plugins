@@ -1,0 +1,175 @@
+name: office
+# A PR, or a push that touches office/, tests the plugin: the Go server
+# (gofmt, vet, the race detector) and the page (types, its tests, the
+# build). A tag office/vX.Y.Z builds its image for amd64, tries it as it
+# runs (read-only: /health with the version, the page, the references and
+# their licenses, the manifest over MCP with the token), pushes it to GHCR
+# as :X.Y.Z and :latest, and makes the release with its section of
+# office/CHANGELOG.md.
+
+on:
+  # Every PR runs the tests of every plugin, required by the protection of
+  # main: a check filtered by path would never report on a PR of another.
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+    paths: ["office/**", ".github/workflows/office.yml"]
+    tags: ["office/v*.*.*"]
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: daniele-chiappa/gosidian-office
+
+jobs:
+  test:
+    name: Test the office plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: office
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: office/go.mod
+          cache-dependency-path: office/go.sum
+
+      - name: gofmt
+        run: |
+          out=$(gofmt -l .)
+          if [ -n "$out" ]; then
+            echo "These files are not gofmt-clean (run gofmt -w):"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet .
+
+      - name: go test
+        run: go test -race -count=1 .
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: The page
+        # No install scripts: none of the page's packages needs one.
+        working-directory: office/web
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run typecheck
+          npm test
+          npm run build
+
+  image:
+    name: Build & push image
+    needs: [test]
+    if: startsWith(github.ref, 'refs/tags/office/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the release
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Version and notes
+        id: meta
+        run: |
+          set -eu
+          VERSION="${GITHUB_REF_NAME#office/v}"
+          awk -v ver="$VERSION" '$0 ~ "^## \\[" ver "\\]" {f=1; next} f && /^## \[/ {exit} f {print}' \
+            office/CHANGELOG.md > "$RUNNER_TEMP/notes.md"
+          if [ ! -s "$RUNNER_TEMP/notes.md" ]; then
+            echo "office/CHANGELOG.md has no section [$VERSION]"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base=${REGISTRY}/${IMAGE}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and try the image
+        # The version comes from the tag's name: through the environment,
+        # never pasted into the script.
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker build --build-arg VERSION="$VERSION" --build-arg REVISION="$GITHUB_SHA" -t "$BASE:$VERSION" office/
+          # Two settings are required: the address the browsers reach it at,
+          # and gosidian's, the only page that may frame it.
+          docker run -d --name office-smoke --network host --read-only --tmpfs /tmp -e GOSIDIAN_PLUGIN_TOKEN=smoke \
+            -e OFFICE_PUBLIC_URL=http://127.0.0.1:8000 -e OFFICE_FRAME_ANCESTORS=http://127.0.0.1:8080 "$BASE:$VERSION"
+          for _ in $(seq 1 30); do
+            if docker exec office-smoke /usr/local/bin/gosidian-office healthcheck 2>/dev/null; then break; fi
+            sleep 2
+          done
+          curl -fsS http://127.0.0.1:8000/health | tee "$RUNNER_TEMP/health.json"
+          grep -q "\"version\":\"$VERSION\"" "$RUNNER_TEMP/health.json"
+          # The page, and its references with the licenses the image keeps.
+          curl -fsS http://127.0.0.1:8000/app/ | grep -qi '<!doctype html>'
+          curl -fsS -o /dev/null http://127.0.0.1:8000/app/about
+          docker exec office-smoke test -s /licenses/go-modules/INDEX
+          docker exec office-smoke test -s /licenses/web/INDEX
+          docker exec office-smoke test -s /licenses/assets/ASSETS.tsv
+          # /mcp wants the token: refused without it, the manifest with it.
+          test "$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8000/mcp)" = 401
+          mcp() {
+            curl -fsS http://127.0.0.1:8000/mcp -H 'Authorization: Bearer smoke' -H 'Content-Type: application/json' \
+              -H 'Accept: application/json, text/event-stream' "$@"
+          }
+          mcp -D "$RUNNER_TEMP/session.txt" -o /dev/null \
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}'
+          SESSION=$(sed -n 's/^[Mm]cp-[Ss]ession-[Ii]d: *//p' "$RUNNER_TEMP/session.txt" | tr -d '\r')
+          mcp -H "Mcp-Session-Id: $SESSION" -H 'MCP-Protocol-Version: 2025-06-18' \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"gosidian_manifest","arguments":{}}}' \
+            | tee "$RUNNER_TEMP/manifest.txt"
+          grep -q "$VERSION" "$RUNNER_TEMP/manifest.txt"
+
+      - name: Login to GHCR
+        # The docker CLI, not a third-party action.
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$TOKEN" | docker login "$REGISTRY" -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Push
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          set -eu
+          docker tag "$BASE:$VERSION" "$BASE:latest"
+          docker push "$BASE:$VERSION"
+          docker push "$BASE:latest"
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.meta.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag \
+            --title "office $VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.meta.outputs.version }}
+          BASE: ${{ steps.meta.outputs.base }}
+        run: |
+          {
+            echo "### Pushed"
+            echo "- \`$BASE:$VERSION\` (amd64)"
+            echo "- \`$BASE:latest\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up
+        if: always()
+        run: docker rm -f office-smoke || true

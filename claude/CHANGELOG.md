@@ -6,6 +6,21 @@ notes are its section here.
 
 ## [Unreleased]
 
+## [0.4.3] — 2026-11-23
+
+### Changed
+- **The run says how many steps it bears at once** (`max_concurrent` on
+  the node `run`, as many as `CLAUDE_WORKERS`), and so does the tool `run`; `version`, `update`, `usage` and `pr` take no worker's place. gosidian
+  2.165.0 and later queue the other steps itself, where
+  their time does not run; before, they waited inside the plugin while
+  gosidian's timeout of the call ran. The manifest changes: accept it
+  again. An older gosidian ignores the field.
+
+### Security
+- **zlib** 1.3.2-r1 → 1.4-r0 (CVE-2026-4738) and **OpenSSL** 3.5.9-r0 →
+  3.5.9-r1 (five Alpine advisories): the Dockerfile runs `apk upgrade`,
+  since `node:24-alpine` lags the repository's fixes.
+
 ## [0.4.2] — 2026-11-16
 
 ### Added

@@ -25,6 +25,9 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
  && GOOS=$TARGETOS GOARCH=$TARGETARCH sh scripts/licenses.sh /out/licenses
 
 FROM alpine:3.24
+# The base's packages at their latest fixes: an image tag lags the Alpine
+# repository (on 2026-11-20 alpine:3.24 still had zlib 1.3.2-r1, the repository 1.4-r0).
+RUN apk upgrade --no-cache
 ARG VERSION=dev
 ARG REVISION=
 LABEL org.opencontainers.image.title="gosidian-chat" \

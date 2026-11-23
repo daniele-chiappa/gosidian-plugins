@@ -105,7 +105,7 @@ plugin keeps what matters out of reach:
 ```yaml
 services:
   pi-openrouter:
-    image: ghcr.io/daniele-chiappa/gosidian-pi:0.4.2
+    image: ghcr.io/daniele-chiappa/gosidian-pi:0.4.3
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${PI_OPENROUTER_TOKEN:?}
@@ -308,7 +308,7 @@ delete leaves the merge or the close as it is, and `note` says why.
 |---|---|---|
 | `GOSIDIAN_PLUGIN_TOKEN` | empty | the bearer token gosidian sends; empty: none |
 | `PI_PRESET` | `/etc/gosidian-pi/preset.yaml` | the preset |
-| `PI_WORKERS` | 1 | steps at once (at most 8 as root, a user each); the others wait |
+| `PI_WORKERS` | 1 | steps at once (at most 8 as root, a user each), the `max_concurrent` of the node `run` in the manifest: gosidian queues the others. Another number is another manifest, to accept again |
 | `PI_RUNS_DIR` | `/tmp/gosidian-pi` | the steps' folders |
 | `PI_MAX_FILES_BYTES` | 256 MiB | the files of one step together |
 | `PI_MAX_OUT_FILES`, `PI_MAX_OUT_BYTES` | 50, 50 MiB | the files given back |
@@ -318,7 +318,7 @@ delete leaves the merge or the close as it is, and `note` says why.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.4.2 --build-context kit=agent-kit -t gosidian-pi:0.4.2 pi/
+docker build --build-arg VERSION=0.4.3 --build-context kit=agent-kit -t gosidian-pi:0.4.3 pi/
 pi/scripts/test.sh                # types and tests in node:24-alpine, with git
 pi/scripts/separation-test.sh     # the image as in production: users, secrets, links, leftovers, a repository, gosidian's MCP
 ```

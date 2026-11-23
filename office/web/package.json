@@ -1,0 +1,23 @@
+{
+  "name": "gosidian-office-page",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The page of gosidian-office: a team of agents as an office map, in a window of gosidian",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "build": "tsc -p . && vite build && node scripts/compress.mjs dist",
+    "licenses": "node scripts/licenses.mjs",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "three": "0.187.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.187.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.1.0"
+  }
+}

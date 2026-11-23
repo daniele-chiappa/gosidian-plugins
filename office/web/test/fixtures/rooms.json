@@ -1,0 +1,46 @@
+{
+  "path": "esempio/squadra.md",
+  "title": "squadra",
+  "line": 8,
+  "team": {
+    "path": "esempio/squadra.md", "coordinator": "capo", "split": "context",
+    "budget": { "day_usd": 5, "task_usd": 1 }, "max_agents": 2, "max_rounds": 5, "reopen_on": "serious",
+    "rooms": [{ "name": "front", "path": "esempio/front.md" }, { "name": "chiusa", "path": "esempio/chiusa.md" }],
+    "roles": [
+      { "name": "capo", "run": "pi.run", "delegates_to": ["front", "dev"], "approve": "none", "tools": null },
+      { "name": "dev", "run": "pi.run", "approve": "none", "tools": null }
+    ]
+  },
+  "problems": [],
+  "pipelines": true,
+  "spent_today": { "cost_usd": 1.5, "tokens": 1000, "steps": 3 },
+  "roles": {
+    "capo": { "state": "working", "notes": [], "tasks": [] },
+    "dev": { "state": "idle", "notes": [], "tasks": [] }
+  },
+  "rooms": [
+    {
+      "name": "front", "path": "esempio/front.md",
+      "view": {
+        "path": "esempio/front.md", "title": "Il front", "line": 6,
+        "team": {
+          "path": "esempio/front.md", "coordinator": "lead", "split": "context",
+          "budget": { "day_usd": 2, "task_usd": 0 }, "max_agents": 1, "max_rounds": 5, "reopen_on": "serious",
+          "roles": [
+            { "name": "lead", "run": "pi.run", "delegates_to": ["ui"], "approve": "none", "tools": null },
+            { "name": "ui", "run": "pi.run", "approve": "none", "tools": null }
+          ]
+        },
+        "problems": [], "pipelines": true,
+        "spent_today": { "cost_usd": 0.75, "tokens": 500, "steps": 2 },
+        "roles": {
+          "lead": { "state": "working", "notes": [], "tasks": [{ "path": "esempio/tasks/o.md", "title": "La pagina", "status": "working", "waits": "" }] },
+          "ui": { "state": "waiting", "notes": [], "tasks": [{ "path": "esempio/tasks/b.md", "title": "Il bottone", "status": "review", "waits": "" }] }
+        },
+        "now": "2026-11-18T21:00:00+01:00"
+      }
+    },
+    { "name": "chiusa", "path": "esempio/chiusa.md", "view": null }
+  ],
+  "now": "2026-11-18T21:00:00+01:00"
+}

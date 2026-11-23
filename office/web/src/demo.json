@@ -1,0 +1,120 @@
+{
+  "path": "esempio/squadra.md",
+  "title": "squadra",
+  "line": 12,
+  "team": {
+    "path": "esempio/squadra.md",
+    "coordinator": "coordinatore",
+    "split": "context",
+    "budget": { "day_usd": 5, "task_usd": 1 },
+    "max_agents": 2,
+    "max_rounds": 5,
+    "reopen_on": "serious",
+    "alert": ["#esempio/agenti"],
+    "approvers": ["alice"],
+    "guide": "esempio/regole.md",
+    "roles": [
+      {
+        "name": "coordinatore",
+        "agent": "esempio/agents/coordinatore.md",
+        "run": "pi.run",
+        "model": "small-model",
+        "max_turns": 20,
+        "max_seconds": 600,
+        "delegates_to": ["ricerca", "sviluppo", "revisione"],
+        "approve": "none"
+      },
+      {
+        "name": "ricerca",
+        "agent": "esempio/agents/ricerca.md",
+        "run": "pi.run",
+        "model": "large-model",
+        "max_turns": 30,
+        "max_tokens": 3000000,
+        "writes": ["esempio/ricerca"],
+        "approve": "none"
+      },
+      {
+        "name": "sviluppo",
+        "agent": "esempio/agents/sviluppo.md",
+        "skills": ["esempio/skills/test-vitest.md"],
+        "run": "pi.run",
+        "model": "small-model",
+        "access": "exec",
+        "max_turns": 60,
+        "repo": "agents-example",
+        "paths": ["web/", "test/"],
+        "forbid": ["package.json"],
+        "checks": "npm test && npm run build",
+        "preview": "dist",
+        "approve": "merge"
+      },
+      {
+        "name": "revisione",
+        "agent": "esempio/agents/revisione.md",
+        "run": "claude.run",
+        "model": "opus",
+        "effort": "high",
+        "max_turns": 40,
+        "review": true,
+        "approve": "none"
+      },
+      {
+        "name": "archivio",
+        "agent": "esempio/agents/archivio.md",
+        "run": "pi.run",
+        "model": "small-model",
+        "access": "read",
+        "approve": "none"
+      }
+    ]
+  },
+  "problems": [],
+  "pipelines": true,
+  "spent_today": { "cost_usd": 1.84, "tokens": 5120000, "steps": 11 },
+  "roles": {
+    "coordinatore": {
+      "state": "working",
+      "agent": { "path": "esempio/agents/coordinatore.md", "title": "coordinatore", "missing": false },
+      "tasks": [
+        { "path": "esempio/tasks/20261118-090000-app.md", "title": "L'app degli esercizi", "status": "working", "waits": "" }
+      ],
+      "spent_today": { "cost_usd": 0.42, "tokens": 1210000, "steps": 3 }
+    },
+    "ricerca": {
+      "state": "queued",
+      "agent": { "path": "esempio/agents/ricerca.md", "title": "ricerca", "missing": false },
+      "tasks": [
+        { "path": "esempio/tasks/20261118-090010-fonti.md", "title": "Le fonti sugli esercizi", "status": "submitted", "waits": "" }
+      ],
+      "spent_today": { "cost_usd": 0.31, "tokens": 980000, "steps": 2 }
+    },
+    "sviluppo": {
+      "state": "waiting",
+      "agent": { "path": "esempio/agents/sviluppo.md", "title": "sviluppo", "missing": false },
+      "notes": [
+        { "path": "esempio/regole.md", "title": "Le regole della squadra", "missing": false, "kind": "team_guide" },
+        { "path": "esempio/skills/test-vitest.md", "title": "I test con vitest", "missing": false, "kind": "skill" }
+      ],
+      "tasks": [
+        { "path": "esempio/tasks/20261118-090020-pagine.md", "title": "Le pagine dell'app", "status": "review", "waits": "" }
+      ],
+      "spent_today": { "cost_usd": 0.96, "tokens": 2680000, "steps": 5 }
+    },
+    "revisione": {
+      "state": "held",
+      "agent": { "path": "esempio/agents/revisione.md", "title": "revisione", "missing": false },
+      "tasks": [
+        { "path": "esempio/tasks/20261118-090030-revisione.md", "title": "La revisione delle pagine", "status": "submitted", "waits": "the tasks it depends on" }
+      ],
+      "spent_today": { "cost_usd": 0.15, "tokens": 250000, "steps": 1 }
+    },
+    "archivio": {
+      "state": "idle",
+      "agent": { "path": "esempio/agents/archivio.md", "title": "archivio", "missing": true },
+      "tasks": [],
+      "spent_today": { "cost_usd": 0, "tokens": 0, "steps": 0 }
+    }
+  },
+  "now": "2026-11-18T16:00:00+01:00"
+}

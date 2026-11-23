@@ -1,0 +1,54 @@
+{
+  "path": "prova/sviluppo.md",
+  "title": "sviluppo",
+  "line": 12,
+  "team": {
+    "path": "prova/sviluppo.md",
+    "coordinator": "capo",
+    "budget": { "day_usd": 3, "task_usd": 0.5 },
+    "max_agents": 1,
+    "max_rounds": 3,
+    "alert": ["#prova/agenti"],
+    "approvers": ["alice"],
+    "roles": [
+      {
+        "name": "capo",
+        "agent": "prova/agents/capo.md",
+        "run": "claude.run",
+        "model": "sonnet",
+        "delegates_to": ["dev", "nessuno"]
+      },
+      {
+        "name": "dev",
+        "agent": "prova/agents/dev.md",
+        "run": "claude.run",
+        "model": "sonnet",
+        "max_turns": 20,
+        "access": "exec",
+        "repo": "agents-example",
+        "paths": ["web/"],
+        "forbid": ["web/config.js"],
+        "checks": "npm test && npm run build",
+        "preview": "dist",
+        "approve": "merge"
+      }
+    ]
+  },
+  "problems": [{ "line": 14, "message": "role capo: delegates_to names nessuno, which is no role" }],
+  "pipelines": false,
+  "roles": {
+    "capo": {
+      "state": "waiting",
+      "agent": { "path": "prova/agents/capo.md", "title": "capo", "missing": false },
+      "tasks": [
+        { "path": "prova/tasks/20261118-100000-piano.md", "title": "Il piano", "status": "input-required", "waits": "a person" }
+      ]
+    },
+    "dev": {
+      "state": "idle",
+      "agent": { "path": "prova/agents/dev.md", "title": "dev", "missing": true },
+      "tasks": []
+    }
+  },
+  "now": "2026-11-18T16:00:00+01:00"
+}

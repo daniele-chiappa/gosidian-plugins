@@ -78,7 +78,7 @@ from starlette.applications import Starlette
 from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
-VERSION = os.environ.get("PLUGIN_VERSION", "0.1.2")
+VERSION = os.environ.get("PLUGIN_VERSION", "0.2.0")
 TOKEN = os.environ.get("GOSIDIAN_PLUGIN_TOKEN", "")
 SERVER_URL = os.environ.get("OCR_SERVER_URL", "").strip().rstrip("/")
 API_KEY = os.environ.get("OCR_API_KEY", "").strip()
@@ -111,8 +111,20 @@ DPI = 200
 MAX_SIDE = 4000
 # Pages sent to the model at a time: their images stay in memory meanwhile.
 BATCH = max(4, CONCURRENCY * 2)
-# A page with no pixel darker than this is blank: it is not sent.
+# A page with no pixel darker than this is blank: it is not sent. A few
+# specks of dust or noise do not count: at most BLANK_SPECKS such pixels,
+# or one in BLANK_SPECKS_PER pixels of a large page.
 BLANK_LEVEL = 250
+BLANK_SPECKS = 32
+BLANK_SPECKS_PER = 100_000
+# A group of up to REPEAT_PERIOD rows of a table or a chart coming
+# REPEAT_MIN times in a row or more is the model repeating itself: it stays
+# once.
+REPEAT_MIN = 4
+REPEAT_PERIOD = 50
+# The most a cell may span, across or down, when a table is written as a
+# grid: a model's span beyond the table's size is a mistake.
+SPAN_MAX = 100
 # A picture smaller than this on both sides is a speck, not a figure.
 PICTURE_MIN_PX = 16
 
@@ -135,6 +147,7 @@ BEFORE = {"table_caption", "code_caption"}  # written above their block
 PARATEXT = {"header", "footer", "page_number", "aside_text"}
 
 CHARTS = ("image", "table")
+TABLES = ("html", "markdown")
 
 CONVERT_SETTINGS = {
     "type": "object",
@@ -147,6 +160,8 @@ CONVERT_SETTINGS = {
         "pictures": {"type": "boolean", "default": True, "description": "Give back the pictures and charts as PNG files."},
         "charts": {"type": "string", "enum": list(CHARTS), "default": "image",
                    "description": "A chart as a picture (image), or also as the table of its data, read by the model (table)."},
+        "tables": {"type": "string", "enum": list(TABLES), "default": "html",
+                   "description": "A table whose cells span rows or columns in HTML (html), or as a markdown grid with a spanned cell's text in every place it covers (markdown), which small models read better."},
         "paratext": {"type": "boolean", "default": False,
                      "description": "Keep the page headers, footers, page numbers and margin notes."},
     },
@@ -168,6 +183,10 @@ CONVERT_OUTPUT = {
             },
         },
         "engine": {"type": "object", "description": "The model and its server's host."},
+        "empty_pages": {"type": "array", "items": {"type": "integer"},
+                        "description": "The pages read that gave nothing: blank, or with nothing the model found on them."},
+        "warnings": {"type": "array", "items": {"type": "string"},
+                     "description": "What the plugin changed in the model's output: the rows of a table or a chart it repeated, left out."},
         "seconds": {"type": "number"},
     },
 }
@@ -250,6 +269,7 @@ CONVERT_TOOL_INPUT = {
         "dpi": {"type": "integer", "minimum": 72, "maximum": 400},
         "pictures": {"type": "boolean"},
         "charts": {"type": "string", "enum": list(CHARTS)},
+        "tables": {"type": "string", "enum": list(TABLES)},
         "paratext": {"type": "boolean"},
     },
 }
@@ -420,8 +440,10 @@ def text_layer(path: pathlib.Path, ext: str) -> tuple[int, list[int]]:
 
 
 def blank(img: Image.Image) -> bool:
-    """A page with no pixel darker than BLANK_LEVEL."""
-    return img.convert("L").getextrema()[0] >= BLANK_LEVEL
+    """A page with no pixel darker than BLANK_LEVEL but a few specks: at
+    most BLANK_SPECKS of them, or one in BLANK_SPECKS_PER pixels."""
+    dark = sum(img.convert("L").histogram()[:BLANK_LEVEL])
+    return dark <= max(BLANK_SPECKS, img.width * img.height // BLANK_SPECKS_PER)
 
 
 # --- markdown -----------------------------------------------------------------
@@ -495,11 +517,12 @@ class _Table(html.parser.HTMLParser):
             self.cell["text"] += data
 
 
-def table_markdown(content: str, picture) -> str:
+def table_markdown(content: str, picture, grid: bool = False) -> str:
     """A table of the model, HTML, in markdown: a grid when no cell spans
-    rows or columns, its first row the header; the HTML as it is
-    otherwise, which a grid cannot say. A picture in a cell (a data URI) is
-    handed to picture(bytes) -> its file's name."""
+    rows or columns, its first row the header; otherwise the HTML as it
+    is, or with grid a grid too, a spanned cell's text in every place it
+    covers. A picture in a cell (a data URI) is handed to picture(bytes)
+    -> its file's name, once whatever the places its cell covers."""
     def pictures_out(text: str, as_md: bool) -> str:
         def one(m):
             name = picture_from_uri(m.group(1), picture)
@@ -515,14 +538,97 @@ def table_markdown(content: str, picture) -> str:
     except Exception:  # not HTML the parser takes: as it is, pictures named
         t.rows = []
     rows = [r for r in t.rows if r]
-    if rows and t.nested <= 0 and all(c["rowspan"] == 1 and c["colspan"] == 1 for r in rows for c in r):
-        width = max(len(r) for r in rows)
-        cells = [[pictures_out(one_line(c["text"]), True).replace("|", "\\|") for c in r] + [""] * (width - len(r)) for r in rows]
+    if rows and t.nested <= 0 and (grid or all(c["rowspan"] == 1 and c["colspan"] == 1 for r in rows for c in r)):
+        for r in rows:
+            for c in r:
+                c["md"] = pictures_out(one_line(c["text"]), True).replace("|", "\\|")
+        cells = spread(rows)
+        width = max(len(r) for r in cells)
+        cells = [r + [""] * (width - len(r)) for r in cells]
         lines = ["| " + " | ".join(cells[0]) + " |", "|" + "---|" * width]
         lines += ["| " + " | ".join(r) + " |" for r in cells[1:]]
         return "\n".join(lines)
     out = re.sub(r'<img\s+src="([^"]*)"\s*/?>', lambda m: f"[[img:{m.group(1)}]]", content.strip())
     return pictures_out(out, False)
+
+
+def spread(rows: list[list[dict]]) -> list[list[str]]:
+    """The rows of a table with their spans undone: each cell's md in every
+    place it covers, across and down (at most SPAN_MAX each way)."""
+    grid: list[list[str]] = []
+    below: dict[tuple[int, int], str] = {}
+    for r, row in enumerate(rows):
+        line: list[str] = []
+        for cell in row:
+            while (r, len(line)) in below:
+                line.append(below.pop((r, len(line))))
+            c = len(line)
+            across, down = min(cell["colspan"], SPAN_MAX), min(cell["rowspan"], SPAN_MAX)
+            for dc in range(across):
+                line.append(cell["md"])
+                for dr in range(1, down):
+                    below[(r + dr, c + dc)] = cell["md"]
+        while (r, len(line)) in below:
+            line.append(below.pop((r, len(line))))
+        grid.append(line)
+    return grid
+
+
+def _filled(row: str) -> bool:
+    """A row with something in it: not blank, not a markdown separator nor
+    empty cells."""
+    return re.sub(r"<[^>]*>|[|:\-\s]", "", row) != ""
+
+
+def repeats_out(rows: list[str]) -> tuple[list[str], int]:
+    """rows without the repetitions of the model: a group of up to
+    REPEAT_PERIOD rows, with something in them, coming REPEAT_MIN times in a
+    row or more stays once, and the rows that go on repeating it go (a last
+    group cut short too). The rows kept, and how many went."""
+    norm = [" ".join(r.split()) for r in rows]
+    n = len(rows)
+    out: list[str] = []
+    dropped = 0
+    i = 0
+    while i < n:
+        period = 0
+        for p in range(1, min(REPEAT_PERIOD, (n - i) // REPEAT_MIN) + 1):
+            if norm[i + p] != norm[i]:
+                continue
+            block = norm[i:i + p]
+            if any(_filled(x) for x in block) and all(norm[i + k * p:i + (k + 1) * p] == block for k in range(1, REPEAT_MIN)):
+                period = p
+                break
+        if not period:
+            out.append(rows[i])
+            i += 1
+            continue
+        out.extend(rows[i:i + period])
+        j = i + period
+        while norm[j:j + period] == norm[i:i + period]:
+            j += period
+        k = 0
+        while j + k < n and k < period and norm[j + k] == norm[i + k]:
+            k += 1
+        j += k
+        dropped += j - (i + period)
+        i = j
+    return out, dropped
+
+
+def content_repeats_out(content: str) -> tuple[str, int]:
+    """A table's or a chart's content without the rows the model repeated:
+    an HTML table by its rows (tr), when nothing but space comes between
+    them; anything else by its lines. The content, and the rows left out."""
+    if re.search(r"<tr\b", content, re.I):
+        parts = re.split(r"(<tr\b.*?</tr>)", content, flags=re.I | re.S)
+        between = parts[2:-1:2]
+        if any(g.strip() for g in between):
+            return content, 0
+        kept, dropped = repeats_out(parts[1::2])
+        return (parts[0] + "".join(kept) + parts[-1], dropped) if dropped else (content, 0)
+    kept, dropped = repeats_out(content.split("\n"))
+    return ("\n".join(kept), dropped) if dropped else (content, 0)
 
 
 def picture_from_uri(uri: str, picture) -> str:
@@ -602,13 +708,22 @@ class Writer:
         return True
 
 
-def page_markdown(w: Writer, blocks: list[dict], crop, picture, paratext: bool, charts: str) -> tuple[int, str]:
+def page_markdown(w: Writer, blocks: list[dict], crop, picture, paratext: bool, charts: str,
+                  grid: bool = False, warn=lambda _text: None) -> tuple[int, str]:
     """A page's blocks, in the model's reading order, written to w: the
     tables it holds and its first title. crop(bbox, caption) saves a part
     of the page as a picture, picture(png, caption) a picture of a table's
-    cell; each gives the file's name, or "" for none."""
+    cell; each gives the file's name, or "" for none. grid writes every
+    table as a markdown grid; warn(text) is told of the rows of a table or
+    a chart the model repeated, left out."""
     tables = 0
     title = ""
+
+    def unrepeated(content: str, what: str) -> str:
+        content, dropped = content_repeats_out(content)
+        if dropped:
+            warn(f"{what} repeated its rows: {dropped} left out")
+        return content
     owners = pair_captions(blocks)
     owned = {i for v in owners.values() for i in v}
     groups = [b["bbox"] for b in blocks if b["type"] == "image_block"]
@@ -634,7 +749,7 @@ def page_markdown(w: Writer, blocks: list[dict], crop, picture, paratext: bool, 
             if text and not (kind == "text" and b.get("merge_prev") and w.go_on(text)):
                 w.add(text, text=kind == "text")
         elif kind == "table":
-            body = table_markdown(content, picture) if content.strip() else ""
+            body = table_markdown(unrepeated(content, "a table"), picture, grid) if content.strip() else ""
             tables += bool(body)
             for part in captions(j, {"table_caption", "caption"}) + [body] + captions(j, {"table_footnote", "footnote"}):
                 w.add(part)
@@ -655,7 +770,8 @@ def page_markdown(w: Writer, blocks: list[dict], crop, picture, paratext: bool, 
             for part in caps:
                 w.add(part)
             if kind == "chart" and charts == "table" and content.strip():
-                w.add(table_markdown(content, picture) if "<table" in content.lower() else content.strip())
+                data = unrepeated(content, "a chart's table")
+                w.add(table_markdown(data, picture, grid) if "<table" in data.lower() else data.strip())
             for part in captions(j, {"image_footnote", "footnote"}):
                 w.add(part)
         elif content.strip():  # a kind of block the plugin does not know: its text
@@ -701,6 +817,10 @@ async def convert_document(path: pathlib.Path, name: str, ext: str, args: dict) 
     charts = str(args.get("charts") or "image")
     if charts not in CHARTS:
         raise ConvertError(f"charts {charts!r}: {' or '.join(CHARTS)}")
+    grid = str(args.get("tables") or "html")
+    if grid not in TABLES:
+        raise ConvertError(f"tables {grid!r}: {' or '.join(TABLES)}")
+    grid = grid == "markdown"
     pictures = args.get("pictures") is not False
     paratext = args.get("paratext") is True
     status = await anyio.to_thread.run_sync(server_status)
@@ -711,11 +831,14 @@ async def convert_document(path: pathlib.Path, name: str, ext: str, args: dict) 
     w = Writer()
     files: list[tuple[str, bytes]] = []
     shown: list[dict] = []
+    empty: list[int] = []
+    warnings: list[str] = []
     tables, title, inked, laid_out = 0, "", 0, 0
     for at in range(0, len(numbers), BATCH):
         batch = numbers[at:at + BATCH]
         images = await anyio.to_thread.run_sync(render, path, ext, batch, dpi)
         todo = [(n, img) for n, img in zip(batch, images) if not blank(img)]
+        empty += [n for n in batch if n not in {m for m, _ in todo}]
         inked += len(todo)
         results = []
         if todo:
@@ -727,14 +850,20 @@ async def convert_document(path: pathlib.Path, name: str, ext: str, args: dict) 
         for (n, img), blocks in zip(todo, results):
             blocks = [dict(b) for b in blocks]
             laid_out += bool(blocks)
+            if not blocks:
+                empty.append(n)
             crop, picture = page_pictures(img, n, files, shown, pictures)
-            t, first = page_markdown(w, blocks, crop, picture, paratext, charts)
+            t, first = page_markdown(w, blocks, crop, picture, paratext, charts, grid,
+                                     lambda text, n=n: warnings.append(f"page {n}: {text}"))
             tables += t
             title = title or first
         del images, todo, results
-    if inked and not laid_out:
-        raise ConvertError(f"{name}: the model found no layout on any of its {inked} pages. A llama-server must run "
-                           "with --special, or the layout's tokens are dropped and nothing comes back")
+    # No layout on any page: empty pages, or a server that drops the
+    # layout's tokens. A page of text the plugin draws tells them apart.
+    if inked and not laid_out and not await layout_seen(client):
+        raise ConvertError(f"{name}: the model found no layout on any of its {inked} pages, nor on a page of text "
+                           "the plugin drew to check it. A llama-server must run with --special, or the layout's "
+                           "tokens are dropped and nothing comes back")
     markdown = re.sub(r"\n{3,}", "\n\n", "\n\n".join(w.parts)).strip()
     return {
         "markdown": markdown + "\n" if markdown else "",
@@ -744,8 +873,39 @@ async def convert_document(path: pathlib.Path, name: str, ext: str, args: dict) 
         "tables": tables,
         "pictures": shown,
         "engine": {"model": status["model"], "server": server_host()},
+        "empty_pages": sorted(empty),
+        "warnings": warnings,
         "seconds": round(time.monotonic() - started, 1),
     }, files
+
+
+# The page of text layout_seen asks the model to lay out.
+PROBE_LINES = (
+    "A page of text the plugin draws to check the model's server.",
+    "The model finds its layout, then reads each of its blocks.",
+    "1 2 3 4 5 6 7 8 9 10",
+)
+
+
+def probe_page() -> Image.Image:
+    from PIL import ImageDraw, ImageFont
+
+    img = Image.new("RGB", (1400, 600), "white")
+    draw = ImageDraw.Draw(img)
+    font = ImageFont.load_default(size=40)
+    for i, line in enumerate(PROBE_LINES):
+        draw.text((80, 100 + i * 90), line, fill="black", font=font)
+    return img
+
+
+async def layout_seen(client) -> bool:
+    """Whether the model finds a layout on a page of text: its server gives
+    the layout's tokens. A failure of the server counts as no."""
+    try:
+        return bool(await client.aio_layout_detect(probe_page()))
+    except Exception as e:
+        log.warning("the check of the layout failed: %s: %s", type(e).__name__, one_line(str(e))[:200])
+        return False
 
 
 async def inspect_document(path: pathlib.Path | None, ext: str) -> dict:
@@ -891,7 +1051,8 @@ async def call_tool(name: str, arguments: dict):
         return tool_error(str(e))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-    log.info("converted a .%s: %d of %d pages, %d pictures, %d tables, %.0f s", ext, result["pages"], result["pages_in_file"], len(files), result["tables"], result["seconds"])
+    log.info("converted a .%s: %d of %d pages (%d empty), %d pictures, %d tables, %d warnings, %.0f s", ext, result["pages"],
+             result["pages_in_file"], len(result["empty_pages"]), len(files), result["tables"], len(result["warnings"]), result["seconds"])
     content: list[types.ContentBlock] = [types.TextContent(type="text", text=result["markdown"])]
     for fn, blob in files:
         content.append(

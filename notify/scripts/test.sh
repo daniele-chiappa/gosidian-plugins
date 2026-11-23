@@ -7,6 +7,9 @@
 # resume address are fakes of the tests. The tests run as a user of their
 # own; in the end the container gives back to the caller's user every file
 # it made. NOTIFY_TEST_NO_SERVICES=1 skips the servers (and their tests).
+# SRC_MOUNT names a docker volume that holds this folder, for a caller that
+# is itself a container beside the daemon (the Gitea runner's job), where
+# a bind mount of the folder would be a path of the daemon's host.
 #
 #   notify/scripts/test.sh
 set -eu
@@ -43,7 +46,7 @@ fi
 docker run --rm --network "$NAME" -e HOME=/tmp -e npm_config_update_notifier=false -e OWNER="$(id -u):$(id -g)" \
 	-e NOTIFY_TEST_NTFY="$NTFY" -e NOTIFY_TEST_NTFY_TOKEN="$NTFY_TOKEN" -e NOTIFY_TEST_SMTP="$SMTP" -e NOTIFY_TEST_MAILPIT="$MAILPIT" \
 	-e NOTIFY_TEST_SMTP_USER=mailer -e NOTIFY_TEST_SMTP_PASS=mailpit-test-pass \
-	-v "$DIR":/app -w /app node:24-alpine \
+	-v "${SRC_MOUNT:-$DIR}":/app -w /app node:24-alpine \
 	sh -c 'rc=0
 		{ npm ci --ignore-scripts --no-audit --no-fund --loglevel=error && npm run check \
 			&& adduser -D -u 19999 tester && su tester -s /bin/sh -c "NOTIFY_TEST_NTFY=$NOTIFY_TEST_NTFY NOTIFY_TEST_NTFY_TOKEN=$NOTIFY_TEST_NTFY_TOKEN NOTIFY_TEST_SMTP=$NOTIFY_TEST_SMTP NOTIFY_TEST_MAILPIT=$NOTIFY_TEST_MAILPIT NOTIFY_TEST_SMTP_USER=$NOTIFY_TEST_SMTP_USER NOTIFY_TEST_SMTP_PASS=$NOTIFY_TEST_SMTP_PASS npm test"; } || rc=$?

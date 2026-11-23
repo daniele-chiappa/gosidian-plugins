@@ -4,6 +4,9 @@
 # (type stripping): there is no build step. Nothing is added to the base
 # image but tini: Telegram and ntfy are plain HTTPS, email is nodemailer.
 FROM node:24-alpine
+# The base's packages at their latest fixes: an image tag lags the Alpine
+# repository (on 2026-11-20 alpine:3.24 still had zlib 1.3.2-r1, the repository 1.4-r0).
+RUN apk upgrade --no-cache
 
 # tini as PID 1. The state (held messages, open questions, the topics the
 # bot made) lives in a volume, the user node's (1000); the plugin needs no

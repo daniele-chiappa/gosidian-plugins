@@ -39,7 +39,10 @@ function int(name: string, def: number): number {
   return n;
 }
 
-export function manifest(p: Preset): Record<string, unknown> {
+// manifest is the plugin's manifest. Its run bears as many calls at once as
+// the workers (PI_WORKERS): gosidian queues the others, where their time
+// does not run, and a pr takes no worker's place in its count.
+export function manifest(p: Preset, workers = 1): Record<string, unknown> {
   return {
     name: p.name,
     version: VERSION,
@@ -54,6 +57,7 @@ export function manifest(p: Preset): Record<string, unknown> {
         description: `Runs the agent ${p.name} (pi) on a task and the files it names${p.repos.length ? ", or a repository of its preset" : ""}: it answers with text or JSON, and gives back the files it writes${p.repos.length ? " and commits what it changed in the repository" : ""}`,
         files: ["files"],
         file_refs: true,
+        max_concurrent: workers,
         input_schema: nodeSchema(p),
         output_schema: outputSchema,
       },
@@ -123,7 +127,7 @@ export async function start(opts: { preset: Preset; token: string; port: number;
   await proxy.listen();
   const env: Env = { ...opts.env, preset, proxy };
   const slots = new Slots(opts.workers);
-  const man = manifest(preset);
+  const man = manifest(preset, opts.workers);
   const toolSchema: any = nodeSchema(preset);
   toolSchema.properties.files = {};
   const ajv = new Ajv({ allErrors: true, useDefaults: true, strict: false });

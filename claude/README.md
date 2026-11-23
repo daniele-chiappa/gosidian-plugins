@@ -172,7 +172,7 @@ the server must refuse to commit.
 ```yaml
 services:
   claude:
-    image: ghcr.io/daniele-chiappa/gosidian-claude:0.4.2
+    image: ghcr.io/daniele-chiappa/gosidian-claude:0.4.3
     restart: unless-stopped
     environment:
       GOSIDIAN_PLUGIN_TOKEN: ${CLAUDE_PLUGIN_TOKEN:?}
@@ -683,7 +683,7 @@ delete leaves the merge or the close as it is, and `note` says why.
 | `CLAUDE_KEEP_VERSIONS` | 3 | versions kept installed |
 | `CLAUDE_KEEP_STEPS` | 200 | the last steps `usage` can give, kept in the volume |
 | `CLAUDE_NPM_REGISTRY` | `https://registry.npmjs.org` | where Claude Code comes from |
-| `CLAUDE_WORKERS` | 1 | steps at once (at most 8 as root, a user each); the others wait |
+| `CLAUDE_WORKERS` | 1 | steps at once (at most 8 as root, a user each), the `max_concurrent` of `run` in the manifest: gosidian queues the others. Another number is another manifest, to accept again |
 | `CLAUDE_RUNS_DIR` | `/tmp/gosidian-claude` | the steps' folders |
 | `CLAUDE_MAX_FILES_BYTES` | 256 MiB | the files of one step together |
 | `CLAUDE_MAX_OUT_FILES`, `CLAUDE_MAX_OUT_BYTES` | 50, 50 MiB | the files given back |
@@ -698,7 +698,7 @@ meanwhile waits for an install in progress, and fails with its reason.
 ## Building and testing
 
 ```bash
-docker build --build-arg VERSION=0.4.2 --build-context kit=agent-kit -t gosidian-claude:0.4.2 claude/
+docker build --build-arg VERSION=0.4.3 --build-context kit=agent-kit -t gosidian-claude:0.4.3 claude/
 claude/scripts/test.sh               # types and tests, in node:24-alpine
 claude/scripts/separation-test.sh    # the image as in production: users, secrets, links, leftovers
 TOKEN_FILE=… claude/scripts/smoke-test.sh   # the real Claude Code and API: install, probe, run, version, usage

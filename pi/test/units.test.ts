@@ -205,6 +205,8 @@ test("the manifest declares agent-run/1, gosidian's MCP and the repositories' ho
   assert.deepEqual(m.nodes.map((n: any) => n.name), ["run"], "no repository with pull requests: no pr");
   assert.equal(m.nodes[0].contract, "agent-run/1");
   assert.equal(m.nodes[0].mcp, true);
+  assert.equal(m.nodes[0].max_concurrent, 1, "the run bears the workers: one by default");
+  assert.equal((manifest(full(), 3) as any).nodes[0].max_concurrent, 3);
   assert.equal(m.nodes[0].output_schema.properties.repo.properties.files.type, "array");
   assert.deepEqual(m.permissions.mcp, ["read", "write"]);
   assert.deepEqual(m.permissions.network, ["gosidian", "llm.example.com", "git.example.com", "git.other.example"]);
@@ -220,7 +222,7 @@ test("the manifest declares agent-run/1, gosidian's MCP and the repositories' ho
   - name: docs
     url: https://git.other.example/team/docs.git`));
   assert.deepEqual(pulls.nodes.map((n: any) => [n.name, n.tool]), [["run", "run"], ["pr", "pr"]]);
-  for (const k of ["contract", "files", "file_refs", "mcp"]) assert.equal(pulls.nodes[1][k], undefined, k);
+  for (const k of ["contract", "files", "file_refs", "mcp", "max_concurrent"]) assert.equal(pulls.nodes[1][k], undefined, k);
   assert.deepEqual(pulls.nodes[1].input_schema.properties.repo.enum, ["app"]);
   assert.deepEqual(pulls.nodes[1].input_schema.properties.action.enum, ["merge", "close"]);
   assert.equal(pulls.nodes[1].output_schema.properties.branch_deleted.type, "boolean");
