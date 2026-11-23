@@ -1,6 +1,6 @@
 # gosidian-docling: the docling plugin of gosidian, on the CPU, with
 # LibreOffice for the office formats docling does not read.
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
