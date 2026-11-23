@@ -1,7 +1,7 @@
 # gosidian-ocr: the OCR plugin of gosidian. The model, MinerU2.5, runs in a
 # server of its own (a llama-server or vLLM, on a GPU): the image holds its
 # client, PDFium to draw the pages, and the plugin.
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
