@@ -4,7 +4,7 @@ mineru-vl-utils==2.0.7
 # (newer than PYPI_BEFORE: PYPI_NEWER in the Dockerfile), and pip, which
 # the image has from Python, past its advisory.
 certifi==2026.10.23
-pip==26.2.1
+pip==26.3
 mcp==2.3.0
 httpx==0.28.1
 jsonschema==4.26.0
