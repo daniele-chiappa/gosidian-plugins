@@ -10,7 +10,7 @@ USER root
 RUN rm -rf /app/.models/asr /app/.models/chunk \
  && /usr/local/bin/docling-rs --version
 
-FROM python:3.12-slim
+FROM python:3.15-slim
 
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
