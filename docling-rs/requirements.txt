@@ -9,7 +9,7 @@ python-pptx==1.0.2
 # Dockerfile); pip, which the image has from Python, past its advisory.
 pillow==13.0.0
 certifi==2026.10.23
-pip==26.2.1
+pip==26.3
 mcp==2.3.0
 httpx==0.28.1
 jsonschema==4.26.0
